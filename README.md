@@ -1,11 +1,11 @@
 # ⚡ Lakeshore Showdown: Sales Contest (Spiff) Website
 
 A live leaderboard and daily sales entry site for a 3-store dealership contest:
-**Chrysler Muskegon vs. Chrysler Grand Haven vs. Grand Haven Ford**, $10,500 prize pool, October 2026.
+**Chrysler Muskegon vs. Chrysler Grand Haven vs. Grand Haven Ford**, $10,500 prize pool, **Sat Sep 26 – Wed Sep 30, 2026** (ends 11:59:59 PM ET). Three categories: new units, used front gross, and **appointments** (appointments count Sat 9/26 – Tue 9/29).
 
-- **Public leaderboard** (`/`): store battle, individual rankings, weekly bounties, projected payouts, trend charts. Works on phones and refreshes every minute.
-- **Enter Sales** (`/enter`): each store manager enters the day's numbers for the whole store on one screen. Defaults to yesterday. Includes edit, delete and copy.
-- **Admin** (`/admin`): rosters, targets, contest dates, prize amounts, PINs, CSV export, backup, demo data, and reset to empty.
+- **Public leaderboard** (`/`): live countdown to the end, store battle, individual rankings (New Unit King, Used Gross Boss, Appointment Ace), Daily Hot Shot, projected payouts, trend charts. Works on phones and refreshes every minute.
+- **Enter Sales** (`/enter`): each store manager enters the day's numbers (new units, appointments, used deals) for the whole store on one screen. Defaults to yesterday. Includes edit, delete and copy.
+- **Admin** (`/admin`): rosters, targets (incl. appointment targets), contest dates, appointment window, prize amounts, score weights, PINs, CSV export, backup, demo data, reset to empty, and a persistent-disk check.
 - **Rules**: `RULES.md`, printable one-pager `Spiff_Rules.pdf` (also served at `/Spiff_Rules.pdf` and `/rules`).
 
 Tech: one Python file (`server.py`) using only the Python standard library, with SQLite for storage. There's no build step and nothing to `pip install`. It includes a Dockerfile, plus `render.yaml` and `fly.toml` for one-click-style deploys.
@@ -44,12 +44,14 @@ python3 server.py              # open http://localhost:8080
 PORT=8787 python3 server.py    # a different port
 ```
 
-On the first run it creates `data/spiff.db` with the 3 stores, placeholder rosters ("Salesperson 1–7") and **fake demo data** (a yellow "DEMO MODE" banner shows on every page). To start empty instead, run `SEED_DEMO=0 python3 server.py`.
+On the first run it creates `data/spiff.db` with the 3 stores, placeholder rosters ("Salesperson 1–7") and **fake demo data** (a yellow "DEMO MODE" banner shows on every page). Demo data is only auto-loaded when the contest hasn't started yet. To start empty instead, run `SEED_DEMO=0 python3 server.py`.
+
+An existing database from the earlier Oct 1–31 version is migrated automatically on start (deals table rebuilt to allow appointment rows, `appt_target` column added, dates/prizes moved to the 5-day format once; entries, rosters, targets and PINs are kept).
 
 Run the tests:
 
 ```bash
-python3 -m unittest discover tests -v        # 30 tests: payout math, tie-breaks, splits, unwinds, API, PINs, CSV, reset
+python3 -m unittest discover tests -v        # 37 tests: payout math ($10,500 total), appointments, Hot Shot, tie-breaks, splits, unwinds, API, PINs, CSV, reset, DB migration
 ```
 
 Optional browser checks (need Node + `npm i playwright-core` + Chrome):
@@ -126,12 +128,12 @@ docker run -d --name showdown --restart unless-stopped -p 80:8080 \
 ```
 For HTTPS, put Caddy in front: `caddy reverse-proxy --from showdown.yourdomain.com --to localhost:8080`.
 
-### Launch checklist (do this before Oct 1)
+### Launch checklist (do this before kickoff)
 
 1. Open `/admin` and log in with the admin PIN.
 2. **Rosters:** rename "Salesperson 1–7" to real names at each store, and add or remove people.
-3. **Stores:** set each store's **new-unit target** and **used-gross target** (for example, the 3-month average + 10%). Check the colors and the $3,500 contributions.
-4. **Contest & Prizes:** confirm the dates and prizes. The green bar must say **Prizes $10,500 = Pool $10,500**. If you change the contest length, the number of bounty weeks changes too, so adjust the bounty amounts until the bar turns green.
+3. **Stores:** set each store's **new-unit target**, **used-gross target** and **appointment target** — sized for the contest length (5 days; appointments 4 days). Check the colors and the $3,500 contributions.
+4. **Contest & Prizes:** confirm the dates and prizes. The green bar must say **Prizes $10,500 = Pool $10,500**. If you change the contest length, the number of Daily Hot Shot days changes too, so adjust the Hot Shot amount until the bar turns green.
 5. **PINs:** confirm the manager PINs, and decide whether the leaderboard is open or needs a view PIN.
 6. **Data:** click **Reset to empty**. This deletes the demo sales and removes the yellow banner.
 7. Print `Spiff_Rules.pdf` for the huddles, and send managers their PIN plus the `/enter` link.
@@ -149,23 +151,23 @@ The admin PIN can do everything a store manager can, for **every store and every
 Mid-contest changes (Admin page) take effect on the leaderboard immediately:
 - store targets, contributions, names and colors
 - roster adds and renames. Deactivating a rep keeps their history; their deals still count for the store.
-- prize and bounty amounts, and bounty week length
+- prize amounts, Daily Hot Shot amount and period length, appointment window
 - contest dates. Entries outside new dates are kept but don't count, and you get a warning.
-- score weighting, points, badge thresholds, closed Sundays, and time zone
+- store-score weights (new / used / appointments), points (incl. per appointment), badge thresholds, closed Sundays, and time zone
 
 **Every leaderboard number and what controls it** (all admin-editable):
 
 | Leaderboard item | Comes from | Where admin changes it |
 |---|---|---|
-| New units, used units, used gross (store + individual boards) | sales entries | Enter Sales (any store, any contest day), Recent entries edit/delete |
-| Store score %, progress bars, store ranking, "leading store" | entries ÷ store targets × weighting | Stores (targets), Contest & Prizes (new-units weight %) |
+| New units, used units, used gross, appointments (store + individual boards) | sales entries (appointments only inside the appointment window) | Enter Sales (any store, any contest day), Recent entries edit/delete, Contest & Prizes (appointment window) |
+| Store score %, progress bars, store ranking, "leading store" | entries ÷ store targets × weights | Stores (targets), Contest & Prizes (weights) |
 | Per-rep averages, roster count | entries ÷ active reps | Rosters (active/inactive) |
 | Prize pool | sum of store contributions | Stores (contribution) |
 | Team pot and per-rep share | team prizes, qualifier units, active reps | Contest & Prizes, Rosters |
-| New Unit King / Used Gross Boss payouts | entries + prize amounts | Enter Sales, Contest & Prizes |
-| Store MVP and points | entries × points per unit / per $1K | Contest & Prizes |
-| Weekly bounties (weeks, leaders, amounts) | contest dates + bounty week length + entries | Contest & Prizes |
-| Days left, "Day X of Y", pace marker, time bar | contest dates + time zone (today's date) | Contest & Prizes |
+| New Unit King / Used Gross Boss / Appointment Ace payouts | entries + prize amounts | Enter Sales, Contest & Prizes |
+| Store MVP and points | entries × points per unit / per $1K / per appointment | Contest & Prizes |
+| Daily Hot Shot (days, leaders, amount) | contest dates + Hot Shot period length + entries | Contest & Prizes |
+| Countdown, days left, "Day X of Y", pace marker, time bar | contest end date (11:59:59 PM) + time zone | Contest & Prizes |
 | Yesterday's highlights (Deal of the Day, Top Closer, Store of the Day, hot streak) | entries for the latest day | Enter Sales |
 | Trend + daily charts | entries ÷ current targets (recomputed for the whole history) | Enter Sales, Stores |
 | Badges | entries + thresholds (Hat Trick units, Heavy Hitter $, On Fire days, closed Sundays) | Contest & Prizes |
@@ -186,11 +188,12 @@ The only thing not edited on the Admin page is the printable `Spiff_Rules.pdf`. 
 
 ## How the contest math works (short)
 
-- **Store score** = 50% × (new units ÷ new target) + 50% × (used gross ÷ used-gross target), shown as % of target with a pace marker. The weighting can be changed in Admin.
-- **Individual boards:** new units (splits count 0.5) and used front gross, all stores together.
-- **Weekly bounties:** 7-day weeks starting on the contest start date. The last week can be shorter (in October: 5 weeks, the last is Oct 29–31).
+- **Store score** = ⅓ × (new units ÷ new target) + ⅓ × (used gross ÷ used-gross target) + ⅓ × (appointments ÷ appointment target), shown as % of target with a pace marker. The weights can be changed in Admin.
+- **Appointments** are entered per rep per day (whole numbers) and only count when dated inside the appointment window (default Sat 9/26 – Tue 9/29, admin-editable). They are stored as `kind='appt'` rows in the `deals` table (`units` = count).
+- **Individual boards:** new units (splits count 0.5), used front gross and appointments, all stores together. One winner each ($2,000 / $2,000 / $1,500).
+- **Daily Hot Shot:** $150 each contest day (5 days) to the rep with the most Showdown Points that day (2 per new unit + 1 per $1,000 used gross + 0.5 per appointment). Tie-break: new units, then used gross, then split. Closed Sunday's prize rolls into the 1st-place team pot.
 - **Payouts** are computed in whole cents, so they always add up to exactly the pool. Tied people split the prize money for the places they hold. Prizes nobody qualifies for roll into the 1st-place store's team pot. Team pots are split evenly among reps with at least 1 counted unit.
-- "Projected" payouts show what would pay out if the contest ended today. Past weeks' bounties show as "won".
+- "Projected" payouts show what would pay out if the contest ended today. Past days' Hot Shots show as "won".
 - Full rules: `RULES.md` / `Spiff_Rules.pdf`.
 
 ## Known limitations

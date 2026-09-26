@@ -23,30 +23,36 @@ COOKIE = "spiff_session"
 
 DEFAULT_SETTINGS = {
     "contest_name": "Lakeshore Showdown",
-    "tagline": "3 stores · 1 month · $10,500 on the line",
-    "start_date": "2026-10-01",
-    "end_date": "2026-10-31",
+    "tagline": "3 stores · 5 days · $10,500 on the line",
+    "start_date": "2026-09-26",
+    "end_date": "2026-09-30",
+    "appt_start": calc.DEFAULT_APPT_WINDOW[0],   # appointments only count on these dates (inclusive)
+    "appt_end": calc.DEFAULT_APPT_WINDOW[1],
     "timezone": os.environ.get("TZ_NAME", "America/Detroit"),
     "closed_sundays": True,
-    "weight_new": 50,
+    "weight_new": 1,          # store battle: relative weights of new units / used gross / appointments vs target
+    "weight_used": 1,         # (1 / 1 / 1 = equal thirds)
+    "weight_appt": 1,
     "points_new": 2,
     "points_per_1k": 1,
+    "points_per_appt": 0.5,   # Showdown Points per appointment (inside the appointment window)
     "heavy_hitter": 4000,
     "qualifier_units": 1,
     "hat_trick_units": 3,
     "streak_days": 3,
-    "bounty_days": 7,
+    "bounty_days": 1,         # Daily Hot Shot period length (1 = every day)
     "prizes": calc.DEFAULT_PRIZES,
     "demo_today": None,
     "view_pin_required": False,
 }
 
 DEFAULT_STORES = [
-    # name, short, color, new target (units), used gross target ($), contribution ($)
-    ("Chrysler Muskegon", "CJDR Muskegon", "#e11d48", 70, 140000, 3500),
-    ("Chrysler Grand Haven", "CJDR Grand Haven", "#f59e0b", 55, 110000, 3500),
-    ("Grand Haven Ford", "GH Ford", "#2563eb", 65, 130000, 3500),
+    # name, short, color, new target (units), used gross target ($), contribution ($), appointment target (window)
+    ("Chrysler Muskegon", "CJDR Muskegon", "#e11d48", 70, 140000, 3500, 60),
+    ("Chrysler Grand Haven", "CJDR Grand Haven", "#f59e0b", 55, 110000, 3500, 48),
+    ("Grand Haven Ford", "GH Ford", "#2563eb", 65, 130000, 3500, 56),
 ]
+SCHEMA_VERSION = 2
 DEFAULT_PINS = {"admin": "9999", "stores": ["1111", "2222", "3333"], "view": ""}
 
 # --------------------------------------------------------------------------------------------- db
@@ -92,23 +98,27 @@ class _Tx:
             self.db.lock.release()
 
 
+# kind: 'new' (units), 'used' (units + gross) or 'appt' (units = number of appointments that day)
+DEALS_COLS = """
+  id INTEGER PRIMARY KEY, store_id INTEGER NOT NULL REFERENCES stores(id),
+  sp_id INTEGER NOT NULL REFERENCES salespeople(id), date TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('new','used','appt')), units REAL NOT NULL, gross REAL DEFAULT 0,
+  note TEXT DEFAULT '', demo INTEGER DEFAULT 0, entered_by TEXT, created_at TEXT, updated_at TEXT"""
+DEALS_FIELDS = "id,store_id,sp_id,date,kind,units,gross,note,demo,entered_by,created_at,updated_at"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS stores (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, short TEXT, color TEXT,
   new_target REAL DEFAULT 0, used_target REAL DEFAULT 0, contribution REAL DEFAULT 0,
-  pin_hash TEXT, sort INTEGER DEFAULT 0);
+  pin_hash TEXT, sort INTEGER DEFAULT 0, appt_target REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS salespeople (
   id INTEGER PRIMARY KEY, store_id INTEGER NOT NULL REFERENCES stores(id),
   name TEXT NOT NULL, active INTEGER DEFAULT 1, placeholder INTEGER DEFAULT 0, sort INTEGER DEFAULT 0);
-CREATE TABLE IF NOT EXISTS deals (
-  id INTEGER PRIMARY KEY, store_id INTEGER NOT NULL REFERENCES stores(id),
-  sp_id INTEGER NOT NULL REFERENCES salespeople(id), date TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('new','used')), units REAL NOT NULL, gross REAL DEFAULT 0,
-  note TEXT DEFAULT '', demo INTEGER DEFAULT 0, entered_by TEXT, created_at TEXT, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS deals (%s);
 CREATE INDEX IF NOT EXISTS deals_store_date ON deals(store_id, date);
 CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, ts TEXT, who TEXT, action TEXT, detail TEXT);
-"""
+""" % DEALS_COLS
 
 db = None
 
@@ -125,6 +135,8 @@ def get_settings():
         except Exception:
             pass
     out["prizes"] = {**calc.DEFAULT_PRIZES, **(out.get("prizes") or {})}
+    for k in calc.LEGACY_PRIZE_KEYS:
+        out["prizes"].pop(k, None)
     return out
 
 
@@ -165,6 +177,19 @@ def today_local():
         return date.today()
 
 
+def contest_end_ts(s):
+    """Epoch milliseconds of the last second of the contest (end date 11:59:59 PM in the dealership time zone)."""
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(s.get("timezone") or "America/Detroit")
+        e = calc.to_date(s["end_date"])
+        dt = datetime(e.year, e.month, e.day, 23, 59, 59, tzinfo=tz)
+        return int(dt.timestamp() * 1000), dt.tzname()
+    except Exception:
+        e = calc.to_date(s["end_date"])
+        return int(datetime(e.year, e.month, e.day, 23, 59, 59).timestamp() * 1000), ""
+
+
 def default_entry_date():
     """Yesterday — or Saturday when yesterday was a (closed) Sunday. Clamped to the contest window."""
     s = get_settings()
@@ -176,15 +201,55 @@ def default_entry_date():
     return max(start, min(d, end))
 
 
+def migrate_schema():
+    """Bring an existing database up to date (safe to run on every start)."""
+    cols = {r["name"] for r in db.q("PRAGMA table_info(stores)")}
+    if "appt_target" not in cols:
+        db.x("ALTER TABLE stores ADD COLUMN appt_target REAL DEFAULT 0")
+    sql = (db.one("SELECT sql FROM sqlite_master WHERE type='table' AND name='deals'") or {}).get("sql") or ""
+    if "'appt'" not in sql:
+        # SQLite can't alter a CHECK constraint: rebuild the deals table with 'appt' allowed, keeping every row + id
+        with db.tx():
+            db.conn.execute(f"CREATE TABLE deals_v2 ({DEALS_COLS})")
+            db.conn.execute(f"INSERT INTO deals_v2 ({DEALS_FIELDS}) SELECT {DEALS_FIELDS} FROM deals")
+            db.conn.execute("DROP TABLE deals")
+            db.conn.execute("ALTER TABLE deals_v2 RENAME TO deals")
+            db.conn.execute("CREATE INDEX IF NOT EXISTS deals_store_date ON deals(store_id, date)")
+
+
+def migrate_settings(first_run):
+    """One-time move of an existing Oct 1-31 database to the Sep 26-30 five-day format with appointments."""
+    ver = get_settings().get("schema_version") or 1
+    if ver >= SCHEMA_VERSION:
+        return
+    if not first_run:
+        cur = get_settings()
+        new = {k: DEFAULT_SETTINGS[k] for k in ("start_date", "end_date", "appt_start", "appt_end", "weight_new",
+                                                  "weight_used", "weight_appt", "points_per_appt", "bounty_days")}
+        new["prizes"] = dict(calc.DEFAULT_PRIZES)
+        if cur.get("tagline") == "3 stores · 1 month · $10,500 on the line":
+            new["tagline"] = DEFAULT_SETTINGS["tagline"]
+        for k, v in new.items():
+            set_setting(k, v)
+        for (name, *_rest, at), row in zip(DEFAULT_STORES, db.q("SELECT id, appt_target FROM stores ORDER BY sort,id")):
+            if not row["appt_target"]:
+                db.x("UPDATE stores SET appt_target=? WHERE id=?", (at, row["id"]))
+        audit("system", "migrate", "5-day format: dates %s to %s, appointments %s to %s, new prize table, appointment targets"
+              % (new["start_date"], new["end_date"], new["appt_start"], new["appt_end"]))
+    set_setting("schema_version", SCHEMA_VERSION)
+
+
 def init_db():
     global db
     db = DB(DB_PATH)
     db.conn.executescript(SCHEMA)
+    migrate_schema()
     first_run = db.one("SELECT COUNT(*) n FROM stores")["n"] == 0
+    migrate_settings(first_run)
     if first_run:
-        for i, (name, short, color, nt, ut, contrib) in enumerate(DEFAULT_STORES):
-            sid = db.x("INSERT INTO stores(name,short,color,new_target,used_target,contribution,sort) VALUES(?,?,?,?,?,?,?)",
-                       (name, short, color, nt, ut, contrib, i))
+        for i, (name, short, color, nt, ut, contrib, at) in enumerate(DEFAULT_STORES):
+            sid = db.x("INSERT INTO stores(name,short,color,new_target,used_target,contribution,sort,appt_target) "
+                       "VALUES(?,?,?,?,?,?,?,?)", (name, short, color, nt, ut, contrib, i, at))
             for n in range(1, 8):
                 db.x("INSERT INTO salespeople(store_id,name,placeholder,sort) VALUES(?,?,1,?)",
                      (sid, f"Salesperson {n}", n))
@@ -193,7 +258,8 @@ def init_db():
             for s, pin in zip(db.q("SELECT id FROM stores ORDER BY sort,id"), DEFAULT_PINS["stores"]):
                 db.x("UPDATE stores SET pin_hash=? WHERE id=?", (hash_pin(pin), s["id"]))
         audit("system", "first-run", "seeded stores, placeholder rosters and demo PINs")
-        if os.environ.get("SEED_DEMO", "1") != "0":
+        # never put fake demo sales on a board whose contest has already started
+        if os.environ.get("SEED_DEMO", "1") != "0" and today_local() < calc.to_date(get_settings()["start_date"]):
             load_demo("system")
     if not get_settings().get("secret_key") and not os.environ.get("SECRET_KEY"):
         set_setting("secret_key", secrets.token_hex(32))
@@ -212,10 +278,12 @@ def init_db():
 
 def load_demo(who):
     s = get_settings()
-    demo_today = "2026-10-18"
+    start, end = calc.to_date(s["start_date"]), calc.to_date(s["end_date"])
+    demo_today = min(end, start + timedelta(days=max(1, round(((end - start).days + 1) * 0.6)))).isoformat()
     stores = db.q("SELECT * FROM stores ORDER BY sort,id")
     people = db.q("SELECT * FROM salespeople ORDER BY store_id, sort, id")
-    rows = demo.generate(stores, people, s["start_date"], demo_today, s.get("closed_sundays", True))
+    rows = demo.generate(stores, people, s["start_date"], demo_today, s.get("closed_sundays", True),
+                         appt_window=calc.appt_window(s))
     with db.tx():
         db.conn.execute("DELETE FROM deals")
         for d in rows:
@@ -319,7 +387,7 @@ def valid_date(v, s=None):
 
 def contest_state():
     s = get_settings()
-    stores = db.q("SELECT id,name,short,color,new_target,used_target,contribution,sort FROM stores ORDER BY sort,id")
+    stores = db.q("SELECT id,name,short,color,new_target,used_target,appt_target,contribution,sort FROM stores ORDER BY sort,id")
     people = db.q("SELECT id,store_id,name,active,placeholder FROM salespeople ORDER BY store_id, sort, id")
     deals = db.q("SELECT id,store_id,sp_id,date,kind,units,gross FROM deals")
     res = calc.compute(s, stores, people, deals, today_local())
@@ -327,10 +395,13 @@ def contest_state():
 
 
 def public_settings(s):
-    keys = ["contest_name", "tagline", "start_date", "end_date", "closed_sundays", "weight_new", "points_new",
-            "points_per_1k", "heavy_hitter", "qualifier_units", "hat_trick_units", "streak_days", "bounty_days",
-            "prizes", "demo_today", "view_pin_required", "timezone"]
-    return {k: s.get(k) for k in keys}
+    keys = ["contest_name", "tagline", "start_date", "end_date", "closed_sundays", "weight_new", "weight_used",
+            "weight_appt", "points_new", "points_per_1k", "points_per_appt", "heavy_hitter", "qualifier_units",
+            "hat_trick_units", "streak_days", "bounty_days", "prizes", "demo_today", "view_pin_required", "timezone",
+            "appt_start", "appt_end"]
+    out = {k: s.get(k) for k in keys}
+    out["end_ts"], out["tz_abbr"] = contest_end_ts(s)
+    return out
 
 
 def grid_for(store_id, d):
@@ -343,6 +414,7 @@ def grid_for(store_id, d):
             continue
         rows.append({"sp_id": p["id"], "store_id": store_id, "name": p["name"], "placeholder": p["placeholder"], "active": p["active"],
                      "new": sum(x["units"] for x in mine if x["kind"] == "new"),
+                     "appt": int(sum(x["units"] for x in mine if x["kind"] == "appt")),
                      "used": [{"gross": x["gross"], "split": x["units"] < 1} for x in mine if x["kind"] == "used"]})
     return rows
 
@@ -351,6 +423,23 @@ def day_status(d):
     """Per store: how many entry rows exist for date d (lets the GM see which stores are done)."""
     counts = {r["store_id"]: r["n"] for r in db.q("SELECT store_id, COUNT(*) n FROM deals WHERE date=? GROUP BY store_id", (d,))}
     return [{"store_id": s["id"], "rows": counts.get(s["id"], 0)} for s in db.q("SELECT id FROM stores ORDER BY sort,id")]
+
+
+def storage_info():
+    """Where the database lives and whether that folder is a separately mounted (persistent) disk."""
+    d = os.path.dirname(os.path.abspath(DB_PATH))
+    mount = None
+    try:
+        best = ""
+        with open("/proc/mounts") as f:
+            for ln in f:
+                parts = ln.split()
+                if len(parts) >= 3 and (d == parts[1] or d.startswith(parts[1].rstrip("/") + "/")) and len(parts[1]) > len(best):
+                    best = parts[1]
+                    mount = {"mount_point": parts[1], "device": parts[0], "fs": parts[2]}
+    except Exception:
+        pass
+    return {"db_path": os.path.abspath(DB_PATH), "db_dir": d, "db_dir_is_mount": os.path.ismount(d), "mount": mount}
 
 
 def csv_text(header, rows):
@@ -555,7 +644,7 @@ class Handler(BaseHTTPRequestHandler):
         stores = db.q("SELECT id,name,short,color FROM stores ORDER BY sort,id") if is_admin else [store]
         self.send(200, {"store": store, "stores": stores, "date": d, "default_date": default_entry_date().isoformat(),
                         "today": today_local().isoformat(), "start_date": st["start_date"], "end_date": st["end_date"],
-                        "closed_sundays": st.get("closed_sundays"),
+                        "closed_sundays": st.get("closed_sundays"), "appt_start": st["appt_start"], "appt_end": st["appt_end"],
                         "sections": [{"store": store, "grid": grid_for(int(store_id), d)}],
                         "grid": grid_for(int(store_id), d), "day_status": day_status(d) if is_admin else None,
                         "people": people, "recent": recent, "demo": bool(st.get("demo_today"))})
@@ -572,7 +661,7 @@ class Handler(BaseHTTPRequestHandler):
                       "ORDER BY s.sort, s.id, p.sort, p.id")
         self.send(200, {"store": None, "stores": stores, "date": d, "default_date": default_entry_date().isoformat(),
                         "today": today_local().isoformat(), "start_date": st["start_date"], "end_date": st["end_date"],
-                        "closed_sundays": st.get("closed_sundays"),
+                        "closed_sundays": st.get("closed_sundays"), "appt_start": st["appt_start"], "appt_end": st["appt_end"],
                         "sections": [{"store": x, "grid": grid_for(x["id"], d)} for x in stores],
                         "day_status": day_status(d), "people": people, "recent": recent,
                         "demo": bool(st.get("demo_today"))})
@@ -600,13 +689,20 @@ class Handler(BaseHTTPRequestHandler):
                 used.append((0.5 if u.get("split") else 1.0, round(g, 2)))
             if len(used) > 20:
                 raise ApiError(400, "Too many used deals for one day")
-            clean.append((sp, new, used))
+            # appointments: whole number; a row sent without "appt" (older page) leaves that day's appointments alone
+            appt = int(num(r.get("appt") or 0, "Appointments", 0, 200, 1)) if "appt" in r else None
+            clean.append((sp, new, used, appt))
         n = 0
         names = {p["id"]: p["name"] for p in db.q("SELECT id,name FROM salespeople WHERE store_id=?", (store_id,))}
         sname = (db.one("SELECT short FROM stores WHERE id=?", (store_id,)) or {}).get("short", store_id)
         with db.tx():
-            for sp, new, used in clean:
-                db.conn.execute("DELETE FROM deals WHERE store_id=? AND sp_id=? AND date=?", (store_id, sp, d))
+            for sp, new, used, appt in clean:
+                kinds = "('new','used','appt')" if appt is not None else "('new','used')"
+                db.conn.execute(f"DELETE FROM deals WHERE store_id=? AND sp_id=? AND date=? AND kind IN {kinds}", (store_id, sp, d))
+                if appt:
+                    db.conn.execute("INSERT INTO deals(store_id,sp_id,date,kind,units,gross,entered_by,created_at) "
+                                    "VALUES(?,?,?,'appt',?,0,?,?)", (store_id, sp, d, appt, self.who(s), now_iso()))
+                    n += 1
                 if new > 0:
                     db.conn.execute("INSERT INTO deals(store_id,sp_id,date,kind,units,gross,entered_by,created_at) "
                                     "VALUES(?,?,?,'new',?,0,?,?)", (store_id, sp, d, new, self.who(s), now_iso()))
@@ -616,7 +712,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "VALUES(?,?,?,'used',?,?,?,?)", (store_id, sp, d, units, g, self.who(s), now_iso()))
                     n += 1
         detail = "; ".join(f"{names.get(sp, sp)}: {new:g} new, " + (", ".join(f"{'½ ' if u < 1 else ''}${g:,.0f}" for u, g in used) or "no used")
-                           for sp, new, used in clean)
+                           + (f", {appt} appt" if appt is not None else "") for sp, new, used, appt in clean)
         audit(self.who(s), "grid-save", f"{sname} {d}: {detail}")
         self.send(200, {"ok": True, "rows_saved": n, "grid": grid_for(int(store_id), d)})
 
@@ -624,11 +720,14 @@ class Handler(BaseHTTPRequestHandler):
         sp = int(b.get("sp_id") or 0)
         self._check_sp(sp, store_id)
         kind = b.get("kind")
-        if kind not in ("new", "used"):
-            raise ApiError(400, "kind must be new or used")
+        if kind not in ("new", "used", "appt"):
+            raise ApiError(400, "kind must be new, used or appt")
         d = valid_date(b.get("date"))
         if kind == "new":
             units = num(b.get("units"), "Units", 0.5, 30, 0.5)
+            gross = 0
+        elif kind == "appt":
+            units = num(b.get("units"), "Appointments", 1, 200, 1)
             gross = 0
         else:
             units = 0.5 if b.get("split") or float(b.get("units") or 1) == 0.5 else 1.0
@@ -680,7 +779,7 @@ class Handler(BaseHTTPRequestHandler):
     def api_admin_get(self, s, qs):
         self.need_admin(s)
         st, stores, people, res = contest_state()
-        full = db.q("SELECT id,name,short,color,new_target,used_target,contribution,sort, pin_hash IS NOT NULL AS has_pin "
+        full = db.q("SELECT id,name,short,color,new_target,used_target,appt_target,contribution,sort, pin_hash IS NOT NULL AS has_pin "
                     "FROM stores ORDER BY sort,id")
         counts = {r["sp_id"]: r["n"] for r in db.q("SELECT sp_id, COUNT(*) n FROM deals GROUP BY sp_id")}
         for p in people:
@@ -693,7 +792,8 @@ class Handler(BaseHTTPRequestHandler):
                         "deal_count": db.one("SELECT COUNT(*) n FROM deals")["n"],
                         "demo_count": db.one("SELECT COUNT(*) n FROM deals WHERE demo=1")["n"],
                         "audit": db.q("SELECT * FROM audit ORDER BY id DESC LIMIT 40"),
-                        "env_pins": {k: bool(os.environ.get(k)) for k in ("ADMIN_PIN", "VIEW_PIN")}})
+                        "env_pins": {k: bool(os.environ.get(k)) for k in ("ADMIN_PIN", "VIEW_PIN")},
+                        "storage": storage_info()})
 
     def api_admin_settings(self, s, qs):
         self.need_admin(s)
@@ -721,7 +821,16 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, "End date must be after start date (max 1 year)")
         if "closed_sundays" in b:
             out["closed_sundays"] = bool(b["closed_sundays"])
-        for k, lo, hi in (("weight_new", 0, 100), ("points_new", 0, 100), ("points_per_1k", 0, 100),
+        for k in ("appt_start", "appt_end"):
+            if k in b:
+                try:
+                    out[k] = date.fromisoformat(b[k]).isoformat()
+                except Exception:
+                    raise ApiError(400, f"Bad {k}")
+        if calc.to_date(out.get("appt_end", cur["appt_end"])) < calc.to_date(out.get("appt_start", cur["appt_start"])):
+            raise ApiError(400, "Appointment window: last day must be on or after the first day")
+        for k, lo, hi in (("weight_new", 0, 100), ("weight_used", 0, 100), ("weight_appt", 0, 100),
+                          ("points_new", 0, 100), ("points_per_1k", 0, 100), ("points_per_appt", 0, 100),
                           ("heavy_hitter", 0, 100000), ("qualifier_units", 0, 50), ("hat_trick_units", 0.5, 50),
                           ("streak_days", 2, 60), ("bounty_days", 1, 366)):
             if k in b:
@@ -729,14 +838,17 @@ class Handler(BaseHTTPRequestHandler):
         if "prizes" in b:
             p = b["prizes"]
             pr = {}
-            for k in ("team", "new", "used"):
+            for k in ("team", "new", "used", "appt"):
                 arr = p.get(k, cur["prizes"][k])
                 if not isinstance(arr, list) or len(arr) > 10:
                     raise ApiError(400, f"prizes.{k} must be a list")
                 pr[k] = [num(x, f"{k} prize", 0, 100000) for x in arr]
-            for k in ("mvp", "top_gun", "big_fish"):
+            for k in ("mvp", "hot_shot"):
                 pr[k] = num(p.get(k, cur["prizes"][k]), f"{k} prize", 0, 100000)
             out["prizes"] = pr
+        wts = [out.get(k, cur.get(k)) for k in ("weight_new", "weight_used", "weight_appt")]
+        if all(w is not None for w in wts) and sum(float(w) for w in wts) <= 0:
+            raise ApiError(400, "At least one store-score weight must be above 0")
         changes = []
         for k, v in out.items():
             if cur.get(k) != v:
@@ -759,13 +871,15 @@ class Handler(BaseHTTPRequestHandler):
         color = str(b.get("color") or "#2563eb")
         if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
             raise ApiError(400, "Color must look like #1e40af")
-        old = db.one("SELECT name, short, color, new_target, used_target, contribution FROM stores WHERE id=?", (store_id,))
+        old = db.one("SELECT name, short, color, new_target, used_target, appt_target, contribution FROM stores WHERE id=?", (store_id,))
         new = {"name": name, "short": str(b.get("short") or name)[:30], "color": color,
                "new_target": num(b.get("new_target"), "New target", 0, 10000),
                "used_target": num(b.get("used_target"), "Used gross target", 0, 1e8),
+               "appt_target": num(b.get("appt_target", old["appt_target"]), "Appointment target", 0, 100000),
                "contribution": num(b.get("contribution"), "Contribution", 0, 1e6)}
-        db.x("UPDATE stores SET name=?, short=?, color=?, new_target=?, used_target=?, contribution=? WHERE id=?",
-             (new["name"], new["short"], new["color"], new["new_target"], new["used_target"], new["contribution"], store_id))
+        db.x("UPDATE stores SET name=?, short=?, color=?, new_target=?, used_target=?, appt_target=?, contribution=? WHERE id=?",
+             (new["name"], new["short"], new["color"], new["new_target"], new["used_target"], new["appt_target"],
+              new["contribution"], store_id))
         changes = [f"{k}: {old[k]} -> {v}" for k, v in new.items() if old[k] != v]
         if changes:
             audit(self.who(s), "store-edit", f"{old['name']}: " + "; ".join(changes))
@@ -868,13 +982,15 @@ class Handler(BaseHTTPRequestHandler):
                               r["updated_at"] or "", r["demo"]] for r in rows])
         elif what == "standings":
             text = csv_text(["rank", "store", "new_units", "new_target", "new_pct", "used_units", "used_gross",
-                             "used_target", "used_pct", "store_score", "projected_team_prize"],
+                             "used_target", "used_pct", "appointments", "appt_target", "appt_pct", "store_score",
+                             "projected_team_prize"],
                             [[x["rank"], x["name"], x["new"], x["new_target"], x["new_pct"], x["used_units"], x["gross"],
-                              x["used_target"], x["used_pct"], x["score"], x["team_prize"]] for x in res["stores"]])
+                              x["used_target"], x["used_pct"], x["appts"], x["appt_target"], x["appt_pct"], x["score"],
+                              x["team_prize"]] for x in res["stores"]])
         elif what == "individuals":
-            text = csv_text(["salesperson", "store", "new_units", "used_units", "used_gross", "showdown_points",
+            text = csv_text(["salesperson", "store", "new_units", "used_units", "used_gross", "appointments", "showdown_points",
                              "best_used_deal", "badges", "projected_payout"],
-                            [[x["name"], sname.get(x["store_id"]), x["new"], x["used_units"], x["gross"], x["points"],
+                            [[x["name"], sname.get(x["store_id"]), x["new"], x["used_units"], x["gross"], x["appts"], x["points"],
                               x["best_deal"], " ".join(x["badges"]), x["projected"]] for x in res["leaderboards"]["new"]])
         elif what == "payouts":
             text = csv_text(["category", "label", "salesperson", "store", "amount", "status"],

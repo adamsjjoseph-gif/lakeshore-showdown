@@ -8,13 +8,16 @@ from collections import defaultdict
 from datetime import date, timedelta
 
 DEFAULT_PRIZES = {
-    "team": [3000, 1500, 0],      # Store Battle: 1st / 2nd / 3rd place store (split among qualified reps)
-    "new": [1000, 600, 400],      # New Unit King: top 3 individuals (all stores)
-    "used": [1000, 600, 400],     # Used Gross Boss: top 3 individuals (all stores)
+    "team": [2500, 1000, 0],      # Store Battle: 1st / 2nd / 3rd place store (split among qualified reps)
+    "new": [2000, 0, 0],          # New Unit King: top individual (all stores)
+    "used": [2000, 0, 0],         # Used Gross Boss: top individual (all stores)
+    "appt": [1500, 0, 0],         # Appointment Ace: top individual, appointments inside the appointment window
     "mvp": 250,                   # Store MVP: top Showdown Points at EACH store
-    "top_gun": 125,               # Weekly bounty: most new units in the week
-    "big_fish": 125,              # Weekly bounty: biggest single used-car gross deal of the week
+    "hot_shot": 150,              # Daily Hot Shot: most Showdown Points that day (one prize per bounty period, default 1 day)
 }
+POOL_TOTAL = 10500                # 3 stores x $3,500
+LEGACY_PRIZE_KEYS = ("top_gun", "big_fish")   # weekly bounties used before the 5-day format (ignored now)
+DEFAULT_APPT_WINDOW = ("2026-09-26", "2026-09-29")
 
 BADGES = {
     "hat_trick": {"icon": "🎩", "name": "Hat Trick", "desc": "3+ new units in one day"},
@@ -92,17 +95,42 @@ def contest_periods(start, end, days=7):
 
 
 def prize_budget(prizes, n_stores, n_periods):
-    """Total dollars the prize settings will pay out (must equal the pool)."""
+    """Total CENTS the prize settings will pay out (must equal the pool)."""
     p = {**DEFAULT_PRIZES, **(prizes or {})}
     parts = {
         "team": sum(c(x) for x in p["team"]),
         "new": sum(c(x) for x in p["new"]),
         "used": sum(c(x) for x in p["used"]),
+        "appt": sum(c(x) for x in p["appt"]),
         "mvp": c(p["mvp"]) * n_stores,
-        "bounties": (c(p["top_gun"]) + c(p["big_fish"])) * n_periods,
+        "hot_shot": c(p["hot_shot"]) * n_periods,
     }
     parts["total"] = sum(parts.values())
     return parts
+
+
+def score_weights(cfg):
+    """Store-battle weights for (new units, used gross, appointments), normalised to add up to 1.
+    Settings hold relative weights (default 1/1/1 = equal thirds). Older databases only had weight_new (a % with
+    used = 100 - new); for those, appointments get the average of the other two, which is equal thirds for 50/50."""
+    if cfg.get("weight_used") is None:           # legacy: weight_new is a %, used = 100 - new
+        wn = float(cfg.get("weight_new", 50) or 0)
+        wu = max(0.0, 100 - wn)
+        wa = float(cfg["weight_appt"]) if cfg.get("weight_appt") is not None else (wn + wu) / 2
+    else:
+        wn = float(cfg.get("weight_new") or 0)
+        wu = float(cfg.get("weight_used") or 0)
+        wa = float(cfg.get("weight_appt") or 0)
+    tot = wn + wu + wa
+    if tot <= 0:
+        return 1 / 3, 1 / 3, 1 / 3
+    return wn / tot, wu / tot, wa / tot
+
+
+def appt_window(cfg):
+    a = cfg.get("appt_start") or DEFAULT_APPT_WINDOW[0]
+    b = cfg.get("appt_end") or DEFAULT_APPT_WINDOW[1]
+    return to_date(a), to_date(b)
 
 
 def _place_label(places):
@@ -124,15 +152,17 @@ def compute(cfg, stores, people, deals, today):
     """
     start, end, today = to_date(cfg["start_date"]), to_date(cfg["end_date"]), to_date(today)
     P = {**DEFAULT_PRIZES, **(cfg.get("prizes") or {})}
-    w_new = float(cfg.get("weight_new", 50)) / 100.0
+    w_new, w_used, w_appt = score_weights(cfg)
+    a_start, a_end = appt_window(cfg)
     pts_new = float(cfg.get("points_new", 2))
     pts_k = float(cfg.get("points_per_1k", 1))
+    pts_appt = float(cfg.get("points_per_appt", 0.5) or 0)
     heavy_c = c(cfg.get("heavy_hitter", 4000))
     qual_units = float(cfg.get("qualifier_units", 1))
     closed_sun = bool(cfg.get("closed_sundays", True))
     hat_units = float(cfg.get("hat_trick_units", 3) or 3)
     streak_need = int(cfg.get("streak_days", 3) or 3)
-    bounty_days = int(cfg.get("bounty_days", 7) or 7)
+    bounty_days = int(cfg.get("bounty_days", 1) or 1)
 
     total_days = (end - start).days + 1
     if today < start:
@@ -147,19 +177,25 @@ def compute(cfg, stores, people, deals, today):
     pmap = {p["id"]: p for p in people}
 
     # ---- clean deals: in contest window, known salesperson ----
-    ds = []
+    # new/used rows go in ds; appointment rows ('appt', units = count) only count inside the appointment window
+    ds, aps = [], []
     for d in deals:
         dd = to_date(d["date"])
         if d["sp_id"] not in pmap or not (start <= dd <= end):
             continue
-        ds.append({**d, "date": dd, "units": float(d["units"] or 0), "gross_c": c(d.get("gross") or 0)
-                   if d["kind"] == "used" else 0, "store_id": pmap[d["sp_id"]]["store_id"]})
+        row = {**d, "date": dd, "units": float(d["units"] or 0), "gross_c": c(d.get("gross") or 0)
+               if d["kind"] == "used" else 0, "store_id": pmap[d["sp_id"]]["store_id"]}
+        if d["kind"] == "appt":
+            if a_start <= dd <= a_end:
+                aps.append(row)
+        else:
+            ds.append(row)
 
     # ---- individual stats ----
     ps = {}
     for p in people:
         ps[p["id"]] = {"id": p["id"], "name": p["name"], "store_id": p["store_id"], "active": bool(p.get("active", 1)),
-                       "new": 0.0, "used_units": 0.0, "gross_c": 0, "best_deal_c": None, "days": set(),
+                       "new": 0.0, "used_units": 0.0, "gross_c": 0, "best_deal_c": None, "days": set(), "appts": 0.0,
                        "new_by_day": defaultdict(float), "used_days": set()}
     for d in ds:
         s = ps[d["sp_id"]]
@@ -173,8 +209,10 @@ def compute(cfg, stores, people, deals, today):
             s["used_days"].add(d["date"])
             if s["best_deal_c"] is None or d["gross_c"] > s["best_deal_c"]:
                 s["best_deal_c"] = d["gross_c"]
+    for a in aps:
+        ps[a["sp_id"]]["appts"] += a["units"]
     for s in ps.values():
-        s["points"] = round(s["new"] * pts_new + (s["gross_c"] / 100000.0) * pts_k, 2)
+        s["points"] = round(s["new"] * pts_new + (s["gross_c"] / 100000.0) * pts_k + s["appts"] * pts_appt, 2)
         s["badges"] = _badges(s, start, heavy_c, closed_sun, hat_units, streak_need)
         s["streak"] = _current_streak(s["days"], min(today - timedelta(days=1), end), closed_sun)
 
@@ -184,7 +222,7 @@ def compute(cfg, stores, people, deals, today):
     rollover = 0
 
     # nothing to project before the contest starts or before the first deal is entered
-    projecting = status != "upcoming" and bool(ds)
+    projecting = status != "upcoming" and bool(ds or aps)
 
     def emit(cat, label, pid, sid, cents, st):
         if not projecting:
@@ -205,7 +243,9 @@ def compute(cfg, stores, people, deals, today):
 
     new_key = lambda s: (s["new"], s["gross_c"])
     used_key = lambda s: (s["gross_c"], s["new"])
-    for cat, key, metric, prizes in (("new", new_key, "new", P["new"]), ("used", used_key, "gross_c", P["used"])):
+    appt_key = lambda s: (s["appts"], s["new"], s["gross_c"])
+    for cat, key, metric, prizes in (("new", new_key, "new", P["new"]), ("used", used_key, "gross_c", P["used"]),
+                                     ("appt", appt_key, "appts", P["appt"])):
         elig = [s for s in active if s[metric] > 0]
         groups = [[x["id"] for x in g] for g in tie_groups(elig, key)]
         awards, lines, unc = award_places(groups, [c(x) for x in prizes])
@@ -229,9 +269,11 @@ def compute(cfg, stores, people, deals, today):
             rollover += mvp_c
             unclaimed_notes.append({"cat": "mvp", "cents": mvp_c, "store_id": sid})
 
-    # ---- weekly bounties ----
+    # ---- Daily Hot Shot (one prize per bounty period; default period = 1 day) ----
+    # Winner = most Showdown Points earned in that period (new units + used gross + appointments in the window).
+    # Tie-break: more new units that day, then more used gross, then the tied reps split the prize.
     periods = contest_periods(start, end, bounty_days)
-    tg_c, bf_c = c(P["top_gun"]), c(P["big_fish"])
+    hs_c = c(P["hot_shot"])
     active_ids = {s["id"] for s in active}
     for per in periods:
         if today > per["end"]:
@@ -241,38 +283,32 @@ def compute(cfg, stores, people, deals, today):
         else:
             pst = "upcoming"
         per["status"] = pst
-        pdeals = [d for d in ds if per["start"] <= d["date"] <= per["end"] and d["sp_id"] in active_ids]
-        # Top Gun: most new units in the week (tie-break: used gross that week, then split)
-        tot = defaultdict(lambda: [0.0, 0])
-        for d in pdeals:
-            if d["kind"] == "new":
-                tot[d["sp_id"]][0] += d["units"]
-            else:
-                tot[d["sp_id"]][1] += d["gross_c"]
-        cand = [(pid, v) for pid, v in tot.items() if v[0] > 0]
-        per["top_gun"] = None
+        tot = defaultdict(lambda: [0.0, 0.0, 0])   # points, new units, gross cents
+        for d in ds:
+            if per["start"] <= d["date"] <= per["end"] and d["sp_id"] in active_ids:
+                t = tot[d["sp_id"]]
+                if d["kind"] == "new":
+                    t[0] += d["units"] * pts_new
+                    t[1] += d["units"]
+                else:
+                    t[0] += d["gross_c"] / 100000.0 * pts_k
+                    t[2] += d["gross_c"]
+        for a in aps:
+            if per["start"] <= a["date"] <= per["end"] and a["sp_id"] in active_ids:
+                tot[a["sp_id"]][0] += a["units"] * pts_appt
+        cand = [(pid, (round(v[0], 6), v[1], v[2])) for pid, v in tot.items() if round(v[0], 6) > 0]
+        per["hot_shot"] = None
         if cand and pst != "upcoming":
-            g = tie_groups(cand, lambda x: (x[1][0], x[1][1]))[0]
-            per["top_gun"] = {"ids": [x[0] for x in g], "units": g[0][1][0]}
-            for (pid, _), sh in zip(g, split_cents(tg_c, len(g))):
-                emit("top_gun", f"Week {per['n']} Top Gun", pid, ps[pid]["store_id"], sh,
+            g = tie_groups(cand, lambda x: x[1])[0]
+            per["hot_shot"] = {"ids": sorted(x[0] for x in g), "points": round(g[0][1][0], 2), "new": g[0][1][1],
+                               "gross": g[0][1][2] / 100}
+            day_lab = per["start"].strftime("%a %-m/%-d") if per["days"] == 1 else f"Period {per['n']}"
+            for (pid, _), sh in zip(sorted(g), split_cents(hs_c, len(g))):
+                emit("hot_shot", f"Daily Hot Shot {day_lab}" + (" (tie)" if len(g) > 1 else ""), pid, ps[pid]["store_id"], sh,
                      "won" if pst == "won" else "leading")
-        elif pst == "won" and tg_c:
-            rollover += tg_c
-            unclaimed_notes.append({"cat": "top_gun", "cents": tg_c, "week": per["n"]})
-        # Big Fish: biggest single used deal (credited gross; split deals count at the rep's half)
-        used = [d for d in pdeals if d["kind"] == "used" and d["gross_c"] > 0]
-        per["big_fish"] = None
-        if used and pst != "upcoming":
-            best = max(d["gross_c"] for d in used)
-            ids = sorted({d["sp_id"] for d in used if d["gross_c"] == best})
-            per["big_fish"] = {"ids": ids, "gross": best / 100}
-            for pid, sh in zip(ids, split_cents(bf_c, len(ids))):
-                emit("big_fish", f"Week {per['n']} Big Fish", pid, ps[pid]["store_id"], sh,
-                     "won" if pst == "won" else "leading")
-        elif pst == "won" and bf_c:
-            rollover += bf_c
-            unclaimed_notes.append({"cat": "big_fish", "cents": bf_c, "week": per["n"]})
+        elif pst == "won" and hs_c:
+            rollover += hs_c
+            unclaimed_notes.append({"cat": "hot_shot", "cents": hs_c, "period": per["n"]})
 
     # ---- store battle ----
     st = {}
@@ -282,14 +318,18 @@ def compute(cfg, stores, people, deals, today):
         new = sum(p["new"] for p in mem)
         uu = sum(p["used_units"] for p in mem)
         g = sum(p["gross_c"] for p in mem)
+        ap = sum(p["appts"] for p in mem)
         nt, ut = float(s.get("new_target") or 0), float(s.get("used_target") or 0)
+        at = float(s.get("appt_target") or 0)
         new_pct = new / nt if nt > 0 else 0.0
         used_pct = (g / 100.0) / ut if ut > 0 else 0.0
-        score = (w_new * new_pct + (1 - w_new) * used_pct) * 100
+        appt_pct = ap / at if at > 0 else 0.0
+        score = (w_new * new_pct + w_used * used_pct + w_appt * appt_pct) * 100
         hc = len(act) or 1
         st[s["id"]] = {"id": s["id"], "name": s["name"], "short": s.get("short") or s["name"], "color": s.get("color"),
                        "new": new, "used_units": uu, "gross": g / 100, "new_target": nt, "used_target": ut,
                        "new_pct": round(new_pct * 100, 2), "used_pct": round(used_pct * 100, 2), "score": round(score, 2),
+                       "appts": ap, "appt_target": at, "appt_pct": round(appt_pct * 100, 2), "appts_per_rep": round(ap / hc, 2),
                        "_score": score, "_new_pct": new_pct, "headcount": len(act),
                        "new_per_rep": round(new / hc, 2), "gross_per_rep": round(g / 100 / hc, 2),
                        "qualifiers": [p["id"] for p in act if p["new"] + p["used_units"] >= qual_units]}
@@ -329,7 +369,7 @@ def compute(cfg, stores, people, deals, today):
     # ---- totals ----
     pool_c = sum(c(s.get("contribution") or 0) for s in stores)
     budget = prize_budget(P, len(stores), len(periods))
-    upcoming_c = sum(tg_c + bf_c for per in periods if per["status"] == "upcoming")
+    upcoming_c = sum(hs_c for per in periods if per["status"] == "upcoming")
     assigned_c = sum(l["cents"] for l in payout_lines)
     by_person = defaultdict(int)
     for l in payout_lines:
@@ -338,39 +378,40 @@ def compute(cfg, stores, people, deals, today):
     # live-week bounties with no leader yet are still "up for grabs"
     live_open_c = 0
     for per in periods:
-        if per["status"] == "live":
-            if not per["top_gun"]:
-                live_open_c += tg_c
-            if not per["big_fish"]:
-                live_open_c += bf_c
+        if per["status"] == "live" and not per["hot_shot"]:
+            live_open_c += hs_c
 
     # ---- leaderboards for display ----
     def person_row(s, extra):
         return {"id": s["id"], "name": s["name"], "store_id": s["store_id"], "new": s["new"],
-                "used_units": s["used_units"], "gross": s["gross_c"] / 100, "points": s["points"],
+                "used_units": s["used_units"], "gross": s["gross_c"] / 100, "points": s["points"], "appts": s["appts"],
                 "best_deal": (s["best_deal_c"] or 0) / 100, "badges": s["badges"], "streak": s["streak"],
                 "projected": by_person.get(s["id"], 0) / 100, **extra}
 
     lb_new = [person_row(s, {"rank": r}) for r, s in ranked(active, new_key)]
     lb_used = [person_row(s, {"rank": r}) for r, s in ranked(active, used_key)]
     lb_points = [person_row(s, {"rank": r}) for r, s in ranked(active, lambda s: (s["points"], s["new"]))]
+    lb_appt = [person_row(s, {"rank": r}) for r, s in ranked(active, appt_key)]
 
     # ---- trend: cumulative store score by day ----
     last_data_day = min(end, today - timedelta(days=1))
     trend = {"dates": [], "stores": {sid: [] for sid in store_ids}, "daily_new": {sid: [] for sid in store_ids},
-             "daily_gross": {sid: [] for sid in store_ids}, "pace": []}
+             "daily_gross": {sid: [] for sid in store_ids}, "daily_appt": {sid: [] for sid in store_ids}, "pace": []}
     if last_data_day >= start:
         cum_new = defaultdict(float)
         cum_g = defaultdict(int)
+        cum_a = defaultdict(float)
         by_day = defaultdict(list)
-        for d in ds:
+        for d in ds + aps:
             by_day[d["date"]].append(d)
         day = start
         while day <= last_data_day:
-            dn, dg = defaultdict(float), defaultdict(int)
+            dn, dg, da = defaultdict(float), defaultdict(int), defaultdict(float)
             for d in by_day.get(day, []):
                 if d["kind"] == "new":
                     dn[d["store_id"]] += d["units"]
+                elif d["kind"] == "appt":
+                    da[d["store_id"]] += d["units"]
                 else:
                     dg[d["store_id"]] += d["gross_c"]
             trend["dates"].append(day.isoformat())
@@ -378,17 +419,20 @@ def compute(cfg, stores, people, deals, today):
             for sid in store_ids:
                 cum_new[sid] += dn[sid]
                 cum_g[sid] += dg[sid]
+                cum_a[sid] += da[sid]
                 s = st[sid]
                 np_ = cum_new[sid] / s["new_target"] if s["new_target"] else 0
                 up_ = cum_g[sid] / 100 / s["used_target"] if s["used_target"] else 0
-                trend["stores"][sid].append(round((w_new * np_ + (1 - w_new) * up_) * 100, 2))
+                ap_ = cum_a[sid] / s["appt_target"] if s["appt_target"] else 0
+                trend["stores"][sid].append(round((w_new * np_ + w_used * up_ + w_appt * ap_) * 100, 2))
                 trend["daily_new"][sid].append(dn[sid])
                 trend["daily_gross"][sid].append(dg[sid] / 100)
+                trend["daily_appt"][sid].append(da[sid])
             day += timedelta(days=1)
 
     # ---- highlights ("yesterday" = latest day with data up to yesterday) ----
     highlights = {}
-    days_with = sorted({d["date"] for d in ds if d["date"] <= last_data_day})
+    days_with = sorted({d["date"] for d in ds + aps if d["date"] <= last_data_day})
     if days_with:
         hd = days_with[-1]
         dd = [d for d in ds if d["date"] == hd]
@@ -404,6 +448,13 @@ def compute(cfg, stores, people, deals, today):
         if nd:
             top = max(nd.values())
             highlights["top_closer"] = {"person_ids": [k for k, v in nd.items() if v == top], "units": top}
+        ad = defaultdict(float)
+        for a in aps:
+            if a["date"] == hd:
+                ad[a["sp_id"]] += a["units"]
+        if ad:
+            top = max(ad.values())
+            highlights["top_setter"] = {"person_ids": [k for k, v in ad.items() if v == top], "appts": top}
         if len(trend["dates"]) >= 1:
             i = trend["dates"].index(hd.isoformat())
             gains = {sid: trend["stores"][sid][i] - (trend["stores"][sid][i - 1] if i > 0 else 0) for sid in store_ids}
@@ -418,14 +469,13 @@ def compute(cfg, stores, people, deals, today):
     per_out = []
     for per in periods:
         per_out.append({"n": per["n"], "start": per["start"].isoformat(), "end": per["end"].isoformat(),
-                        "days": per["days"], "status": per["status"], "top_gun": per["top_gun"],
-                        "big_fish": per["big_fish"]})
+                        "days": per["days"], "status": per["status"], "hot_shot": per["hot_shot"]})
 
     return {
         "status": status, "today": today.isoformat(), "total_days": total_days, "elapsed_days": elapsed,
         "days_left": days_left, "pace_pct": round(pace * 100, 2),
         "stores": sorted(st.values(), key=lambda s: s["rank"]),
-        "leaderboards": {"new": lb_new, "used": lb_used, "points": lb_points},
+        "leaderboards": {"new": lb_new, "used": lb_used, "points": lb_points, "appt": lb_appt},
         "periods": per_out,
         "payouts": {
             "lines": [{**l, "amount": l["cents"] / 100} for l in payout_lines],
@@ -441,6 +491,9 @@ def compute(cfg, stores, people, deals, today):
         "highlights": highlights,
         "badges": _badge_defs(hat_units, heavy_c, streak_need),
         "bounty_days": bounty_days,
+        "appt_window": {"start": a_start.isoformat(), "end": a_end.isoformat(),
+                        "status": "upcoming" if today < a_start else "closed" if today > a_end else "open"},
+        "score_weights": {"new": round(w_new * 100, 2), "used": round(w_used * 100, 2), "appt": round(w_appt * 100, 2)},
     }
 
 

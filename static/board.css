@@ -14,6 +14,30 @@
 .timebar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--hot), var(--gold)); }
 .hero .emoji-bg { position: absolute; right: -12px; bottom: -26px; font-size: 130px; opacity: .10; transform: rotate(-12deg); pointer-events: none; }
 
+/* countdown */
+.countdown { margin-top: 16px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px 22px; overflow: hidden;
+  background: radial-gradient(600px 200px at 50% 0%, rgba(255,61,110,.25), transparent 70%), linear-gradient(180deg, #1c1030, #111a33);
+  box-shadow: 0 0 0 1px rgba(255,61,110,.45), 0 18px 60px rgba(255,61,110,.18); }
+.countdown .cd-k { font-family: var(--cond); font-weight: 700; letter-spacing: .16em; text-transform: uppercase; font-size: 14px; color: var(--muted); }
+.cd-clock { display: flex; gap: 10px; justify-content: center; }
+.cd-u { display: flex; flex-direction: column; align-items: center; min-width: 76px; padding: 6px 8px; border-radius: 14px; background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.08); }
+.cd-u b { font-family: var(--display); font-style: italic; font-weight: 800; font-size: 60px; line-height: .9; color: #fff; text-shadow: 0 0 24px rgba(255,61,110,.7); font-variant-numeric: tabular-nums; }
+.cd-u small { font-family: var(--cond); font-weight: 700; letter-spacing: .14em; text-transform: uppercase; font-size: 11px; color: var(--muted); }
+.cd-over { font-family: var(--display); font-style: italic; font-weight: 800; font-size: 56px; text-transform: uppercase; color: var(--gold); }
+.cd-end { text-align: right; font-size: 14px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+.cd-end b { color: var(--text); }
+.cd-appt { display: inline-block; padding: 4px 10px; border-radius: 99px; background: rgba(255,210,63,.14); color: var(--gold); font-weight: 700; font-size: 13px; }
+.metric.appt .lab > span:first-child { color: var(--gold); }
+.lb-appt h3 { color: var(--gold); }
+.days5 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+@media (max-width: 860px) {
+  .countdown { grid-template-columns: 1fr; text-align: center; }
+  .cd-end { text-align: center; align-items: center; }
+}
+@media (max-width: 640px) {
+  .cd-clock { gap: 6px; } .cd-u { min-width: 0; flex: 1; padding: 6px 4px; } .cd-u b { font-size: 44px; } .cd-over { font-size: 42px; }
+}
+
 /* store battle */
 .battle { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .scard { border-top: 5px solid var(--c); overflow: hidden; padding: 18px 18px 16px; }
@@ -44,7 +68,7 @@
 .scard .avgs b { color: var(--text); }
 
 /* highlights */
-.hl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.hl { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
 .hl .card { padding: 14px 16px; }
 .hl .ic { font-size: 26px; }
 .hl .k { font-family: var(--cond); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; font-size: 12px; color: var(--muted); margin-top: 2px; }
@@ -52,7 +76,7 @@
 .hl .who { font-size: 14px; }
 
 /* leaderboards */
-.boards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.boards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .lb h3 { margin: 0 0 4px; font-family: var(--display); font-style: italic; font-weight: 800; font-size: 28px; text-transform: uppercase; display: flex; align-items: center; gap: 10px; }
 .lb .desc { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
 .row { display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; padding: 9px 6px; border-bottom: 1px solid var(--line); }

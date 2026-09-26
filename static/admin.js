@@ -20,11 +20,12 @@ function budgetHtml() {
   const g = (id) => parseFloat(($("#" + id) || {}).value || "0") || 0;
   const n = periodsFor(val("sStart"), val("sEnd"), g("sBd"));
   const team = g("pT1") + g("pT2") + g("pT3"), nw = g("pN1") + g("pN2") + g("pN3"), us = g("pU1") + g("pU2") + g("pU3");
-  const mvp = g("pMvp") * A.stores.length, bty = (g("pTg") + g("pBf")) * n;
-  const tot = team + nw + us + mvp + bty;
+  const ap = g("pA1") + g("pA2") + g("pA3");
+  const mvp = g("pMvp") * A.stores.length, hs = g("pHs") * n;
+  const tot = team + nw + us + ap + mvp + hs;
   const ok = Math.abs(tot - A.pool) < 0.005;
   return `<div class="budget ${ok ? "ok" : "bad"}">${ok ? "✅" : "⚠"} Prizes ${money(tot)} ${ok ? "=" : "≠"} Pool ${money(A.pool)}
-    <span class="muted" style="font-weight:500">= team ${money(team)} + new ${money(nw)} + used ${money(us)} + MVP ${money(g("pMvp"))}×${A.stores.length} + bounties (${money(g("pTg"))}+${money(g("pBf"))})×${n} bounty weeks</span>
+    <span class="muted" style="font-weight:500">= team ${money(team)} + new ${money(nw)} + used ${money(us)} + appointments ${money(ap)} + MVP ${money(g("pMvp"))}×${A.stores.length} + Daily Hot Shot ${money(g("pHs"))}×${n} ${g("sBd") === 1 ? "days" : "periods"}</span>
     ${ok ? "" : `<b>Off by ${money(tot - A.pool)}. Adjust prizes or store contributions.</b>`}</div>`;
 }
 
@@ -44,7 +45,9 @@ function render() {
     <div class="card"><div class="k">Prize pool</div><div class="v gold">${money(A.pool)}</div></div>
     <div class="card"><div class="k">Budget check</div><div class="v ${A.budget_ok ? "ok" : "bad"}">${A.budget_ok ? "Balanced ✓" : "Off!"}</div></div>
     <div class="card"><div class="k">Entries in DB</div><div class="v">${A.deal_count}</div></div>
-    <div class="card"><div class="k">Leaderboard access</div><div class="v">${s.view_pin_required ? "PIN 🔒" : "Open 🌐"}</div></div></section>`;
+    <div class="card"><div class="k">Leaderboard access</div><div class="v">${s.view_pin_required ? "PIN 🔒" : "Open 🌐"}</div></div>
+    <div class="card"><div class="k">Database storage</div><div class="v ${A.storage && A.storage.db_dir_is_mount ? "ok" : "bad"}" style="font-size:18px">${A.storage && A.storage.db_dir_is_mount ? "Persistent disk ✓" : "⚠ Not on a mounted disk"}</div>
+      <div class="muted" style="font-size:11px">${esc(A.storage ? A.storage.db_path : "")}</div></div></section>`;
 
   h += `<div class="adm section">
   <section class="card full"><h3>🏁 Contest & Prizes</h3>
@@ -53,17 +56,23 @@ function render() {
       <label class="f wide">Tagline<input id="sTag" value="${esc(s.tagline)}"></label>
       <label class="f">Start date<input type="date" id="sStart" value="${s.start_date}" style="color-scheme:dark"></label>
       <label class="f">End date<input type="date" id="sEnd" value="${s.end_date}" style="color-scheme:dark"></label>
-      <label class="f">Store score: new-units weight %<input id="sW" value="${s.weight_new}" inputmode="decimal"></label>
+      <label class="f">📅 Appointments count from<input type="date" id="sAs" value="${s.appt_start}" style="color-scheme:dark"></label>
+      <label class="f">📅 Appointments count through<input type="date" id="sAe" value="${s.appt_end}" style="color-scheme:dark"></label>
+      <label class="f">Store score weight: new units<input id="sW" value="${s.weight_new}" inputmode="decimal"></label>
+      <label class="f">Store score weight: used gross<input id="sWu" value="${s.weight_used}" inputmode="decimal"></label>
+      <label class="f">Store score weight: appointments<input id="sWa" value="${s.weight_appt}" inputmode="decimal"></label>
       <label class="f">Points per new unit<input id="sPn" value="${s.points_new}" inputmode="decimal"></label>
       <label class="f">Points per $1,000 used gross<input id="sPk" value="${s.points_per_1k}" inputmode="decimal"></label>
+      <label class="f">Points per appointment<input id="sPa" value="${s.points_per_appt}" inputmode="decimal"></label>
       <label class="f">Heavy Hitter badge ($ gross)<input id="sHh" value="${s.heavy_hitter}" inputmode="decimal"></label>
       <label class="f">Team-pot qualifier (units)<input id="sQ" value="${s.qualifier_units}" inputmode="decimal"></label>
       <label class="f">Hat Trick badge (new units in a day)<input id="sHt" value="${s.hat_trick_units}" inputmode="decimal"></label>
       <label class="f">On Fire badge (selling days in a row)<input id="sSd" value="${s.streak_days}" inputmode="numeric"></label>
-      <label class="f">Bounty week length (days)<input id="sBd" value="${s.bounty_days}" inputmode="numeric"></label>
+      <label class="f">Hot Shot period length (days, 1 = daily)<input id="sBd" value="${s.bounty_days}" inputmode="numeric"></label>
       <label class="f">Time zone<input id="sTz" value="${esc(s.timezone)}"></label>
       <label class="f">Closed Sundays?<select id="sSun"><option value="1" ${s.closed_sundays ? "selected" : ""}>Yes — skip Sundays</option><option value="0" ${!s.closed_sundays ? "selected" : ""}>No</option></select></label>
     </div>
+    <p class="muted" style="font-size:13px;margin:8px 0 0">Store score weights are relative (1 / 1 / 1 = equal thirds; currently ${[s.weight_new, s.weight_used, s.weight_appt].map((w) => pct((100 * w) / ((+s.weight_new + +s.weight_used + +s.weight_appt) || 1), 1)).join(" / ")}). Appointments entered outside the appointment window are kept but don't count.</p>
     <h4 class="cond muted" style="margin:18px 0 8px">Prize amounts ($)</h4>
     <div class="fields">
       <label class="f">Store battle 1st<input id="pT1" value="${p.team[0] ?? 0}" inputmode="decimal"></label>
@@ -75,9 +84,11 @@ function render() {
       <label class="f">Used gross 1st<input id="pU1" value="${p.used[0] ?? 0}" inputmode="decimal"></label>
       <label class="f">Used gross 2nd<input id="pU2" value="${p.used[1] ?? 0}" inputmode="decimal"></label>
       <label class="f">Used gross 3rd<input id="pU3" value="${p.used[2] ?? 0}" inputmode="decimal"></label>
+      <label class="f">Appointment Ace 1st<input id="pA1" value="${p.appt[0] ?? 0}" inputmode="decimal"></label>
+      <label class="f">Appointment Ace 2nd<input id="pA2" value="${p.appt[1] ?? 0}" inputmode="decimal"></label>
+      <label class="f">Appointment Ace 3rd<input id="pA3" value="${p.appt[2] ?? 0}" inputmode="decimal"></label>
       <label class="f">Store MVP (each store)<input id="pMvp" value="${p.mvp}" inputmode="decimal"></label>
-      <label class="f">Weekly Top Gun<input id="pTg" value="${p.top_gun}" inputmode="decimal"></label>
-      <label class="f">Weekly Big Fish<input id="pBf" value="${p.big_fish}" inputmode="decimal"></label>
+      <label class="f">Daily Hot Shot (each day)<input id="pHs" value="${p.hot_shot}" inputmode="decimal"></label>
     </div>
     <div id="budget"></div>
     <div class="btns" style="margin-top:14px"><button class="btn primary" id="saveSettings">Save contest settings</button></div>
@@ -91,6 +102,7 @@ function render() {
       <label class="f">Color<input type="color" id="stC${st.id}" value="${st.color}"></label>
       <label class="f">New target<input id="stNT${st.id}" value="${st.new_target}" inputmode="decimal"></label>
       <label class="f">Used gross target $<input id="stUT${st.id}" value="${st.used_target}" inputmode="decimal"></label>
+      <label class="f">📅 Appointment target<input id="stAT${st.id}" value="${st.appt_target}" inputmode="decimal"></label>
       <label class="f">Contribution $<input id="stK${st.id}" value="${st.contribution}" inputmode="decimal"></label>
       <div class="btns"><button class="btn small primary" data-savestore="${st.id}">Save</button></div>
       <div class="pinrow" style="grid-column:1/-1;margin:0"><label class="f">New manager PIN (4–8 digits)<input id="stP${st.id}" inputmode="numeric" type="password" autocomplete="new-password" placeholder="${st.has_pin ? "•••• (set)" : "not set"}"></label>
@@ -133,12 +145,13 @@ function render() {
   <section class="card full"><details><summary class="cond" style="cursor:pointer;font-size:15px">📊 What controls each leaderboard number? (click)</summary>
     <table style="margin-top:10px;font-size:13px"><tbody>
       <tr><td><b>Units, used gross, deals, highlights, streaks, trend charts</b></td><td class="muted">Sales entries → Enter Sales (any store, any contest day) or Recent entries (edit/delete)</td></tr>
-      <tr><td><b>Store score % / progress bars / ranking</b></td><td class="muted">Entries ÷ store targets (Stores section) × weighting (Contest & Prizes)</td></tr>
+      <tr><td><b>Store score % / progress bars / ranking</b></td><td class="muted">New units, used gross and appointments ÷ store targets (Stores section) × weights (Contest & Prizes)</td></tr>
+      <tr><td><b>Appointments (store bar, Appointment Ace, points)</b></td><td class="muted">Appointment entries dated inside the appointment window (Contest & Prizes)</td></tr>
       <tr><td><b>Prize pool</b></td><td class="muted">Sum of store contributions (Stores section)</td></tr>
       <tr><td><b>Projected payouts, team pots, per-rep share</b></td><td class="muted">Prize amounts + team-pot qualifier (Contest & Prizes), roster active/inactive</td></tr>
-      <tr><td><b>Bounty weeks</b></td><td class="muted">Start/end dates + bounty week length; amounts in Contest & Prizes</td></tr>
+      <tr><td><b>Daily Hot Shot days</b></td><td class="muted">Start/end dates + Hot Shot period length; amount in Contest & Prizes</td></tr>
       <tr><td><b>Days left / day X of Y / pace line</b></td><td class="muted">Contest dates + time zone (the calendar decides "today")</td></tr>
-      <tr><td><b>Store MVP points</b></td><td class="muted">Points per new unit / per $1,000 used gross</td></tr>
+      <tr><td><b>Store MVP / Hot Shot points</b></td><td class="muted">Points per new unit / per $1,000 used gross / per appointment</td></tr>
       <tr><td><b>Badges</b></td><td class="muted">Hat Trick units, Heavy Hitter $, On Fire days, closed Sundays</td></tr>
       <tr><td><b>Names, store names/colors, contest name & tagline</b></td><td class="muted">Rosters, Stores, Contest & Prizes</td></tr>
     </tbody></table></details></section>
@@ -170,12 +183,13 @@ function bind() {
   $("#saveSettings").onclick = () => saveSettings({
     contest_name: val("sName"), tagline: val("sTag"), start_date: val("sStart"), end_date: val("sEnd"),
     hat_trick_units: nval("sHt"), streak_days: nval("sSd"), bounty_days: nval("sBd"), timezone: val("sTz"),
-    weight_new: nval("sW"), points_new: nval("sPn"), points_per_1k: nval("sPk"), heavy_hitter: nval("sHh"), qualifier_units: nval("sQ"),
+    weight_new: nval("sW"), weight_used: nval("sWu"), weight_appt: nval("sWa"), appt_start: val("sAs"), appt_end: val("sAe"),
+    points_new: nval("sPn"), points_per_1k: nval("sPk"), points_per_appt: nval("sPa"), heavy_hitter: nval("sHh"), qualifier_units: nval("sQ"),
     closed_sundays: val("sSun") === "1",
     prizes: { team: [nval("pT1"), nval("pT2"), nval("pT3")], new: [nval("pN1"), nval("pN2"), nval("pN3")], used: [nval("pU1"), nval("pU2"), nval("pU3")],
-      mvp: nval("pMvp"), top_gun: nval("pTg"), big_fish: nval("pBf") } });
+      appt: [nval("pA1"), nval("pA2"), nval("pA3")], mvp: nval("pMvp"), hot_shot: nval("pHs") } });
   $$("[data-savestore]").forEach((b) => (b.onclick = () => { const i = b.dataset.savestore; call(`/api/admin/stores/${i}`, "PUT", {
-    name: val("stN" + i), short: val("stS" + i), color: val("stC" + i), new_target: nval("stNT" + i), used_target: nval("stUT" + i), contribution: nval("stK" + i) }, "Store saved"); }));
+    name: val("stN" + i), short: val("stS" + i), color: val("stC" + i), new_target: nval("stNT" + i), used_target: nval("stUT" + i), appt_target: nval("stAT" + i), contribution: nval("stK" + i) }, "Store saved"); }));
   $$("[data-storepin]").forEach((b) => (b.onclick = () => { const i = b.dataset.storepin; call("/api/admin/pin", "POST", { which: "store", store_id: +i, pin: val("stP" + i) }, "Store PIN updated"); }));
   $$("[data-rename]").forEach((inp) => (inp.onchange = () => call(`/api/admin/people/${inp.dataset.rename}`, "PUT", { name: inp.value }, "Renamed")));
   $$("[data-toggle]").forEach((b) => (b.onclick = () => { const x = A.people.find((p) => p.id === +b.dataset.toggle); call(`/api/admin/people/${x.id}`, "PUT", { active: !x.active }, x.active ? "Marked inactive" : "Reactivated"); }));

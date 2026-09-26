@@ -8,7 +8,7 @@ body { padding-bottom: 90px; }
 .hint { color: var(--muted); font-size: 14px; margin: 12px 2px 0; }
 .hint b { color: var(--text); }
 .grid { margin-top: 12px; padding: 6px 0; }
-.ghead, .grow { display: grid; grid-template-columns: minmax(150px, 1.1fr) 170px minmax(280px, 2fr) 120px; gap: 14px; align-items: center; padding: 10px 16px; }
+.ghead, .grow { display: grid; grid-template-columns: minmax(150px, 1.1fr) 170px 150px minmax(260px, 2fr) 120px; gap: 14px; align-items: center; padding: 10px 16px; }
 .ghead { font-family: var(--cond); font-weight: 700; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); }
 .grow { border-bottom: 1px solid var(--line); }
 .grow:last-child { border-bottom: 0; }
@@ -44,8 +44,8 @@ body { padding-bottom: 90px; }
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 @media (max-width: 860px) {
   .ghead { display: none; }
-  .grow { grid-template-columns: 1fr auto; grid-template-areas: "nm tot" "new new" "used used"; gap: 10px; padding: 14px; }
-  .grow .c-nm { grid-area: nm; } .grow .c-tot { grid-area: tot; } .grow .c-new { grid-area: new; } .grow .c-used { grid-area: used; }
+  .grow { grid-template-columns: 1fr 1fr; grid-template-areas: "nm tot" "new appt" "used used"; gap: 10px; padding: 14px; }
+  .grow .c-nm { grid-area: nm; } .grow .c-tot { grid-area: tot; } .grow .c-new { grid-area: new; } .grow .c-used { grid-area: used; } .grow .c-appt { grid-area: appt; }
   .lbl { display: block; }
   .head h1 { font-size: 32px; } .datebox { margin-left: 0; width: 100%; }
   .recent .hide-m { display: none; }
@@ -64,3 +64,11 @@ body { padding-bottom: 90px; }
 .gsec:first-of-type { margin-top: 0; }
 .gsec-tot { margin-left: auto; font-family: var(--body); font-style: normal; font-weight: 700; font-size: 13px; color: var(--muted); text-transform: none; }
 @media (max-width: 860px) { .tabs { grid-template-columns: 1fr 1fr; } .tab .tl { font-size: 17px; } }
+/* appointments */
+.step.appt input { width: 54px; color: var(--gold); }
+.step.appt button { border-color: rgba(255,210,63,.35); }
+.step.appt.locked { opacity: .4; }
+.step button:disabled { cursor: not-allowed; }
+.recent .typ.appt { background: rgba(255,210,63,.16); color: var(--gold); }
+.gold { color: var(--gold); }
+@media (max-width: 400px) { .step button { width: 38px; height: 40px; } .step input { width: 50px; } .step.appt input { width: 44px; } }

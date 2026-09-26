@@ -1,5 +1,32 @@
 // Public leaderboard
-let STATE = null, SHOW_ALL = { new: false, used: false };
+let STATE = null, SHOW_ALL = { new: false, used: false, appt: false };
+const md = (iso) => fmtDate(iso, { weekday: "short" }) + " " + fmtDate(iso, { month: "numeric", day: "numeric" });   // "Sat 9/26"
+const apptWindowTxt = (st) => st.appt_start === st.appt_end ? md(st.appt_start) : `${md(st.appt_start)} – ${md(st.appt_end)}`;
+
+// Live countdown to the contest end (end date 11:59:59 PM, dealership time zone). Updates every second.
+function countdownHtml(st) {
+  return `<section class="countdown card" id="countdown" data-end="${st.end_ts}">
+    <div class="cd-k">⏱ <span id="cdLabel">Contest ends in</span></div>
+    <div class="cd-clock" id="cdClock" aria-live="off"></div>
+    <div class="cd-end">Ends <b>${fmtDate(st.end_date, { weekday: "short", month: "short", day: "numeric", year: "numeric" })} · 11:59:59 PM ${esc(st.tz_abbr === "EDT" || st.tz_abbr === "EST" ? "ET" : st.tz_abbr || "")}</b>
+      <span class="cd-appt">📅 Appointments count ${apptWindowTxt(st)}</span></div>
+  </section>`;
+}
+function tickCountdown() {
+  const el = $("#countdown");
+  if (!el) return;
+  const left = Math.floor((+el.dataset.end - Date.now()) / 1000);
+  if (left <= 0) {
+    el.classList.add("over");
+    $("#cdLabel").textContent = "Final";
+    $("#cdClock").innerHTML = `<span class="cd-over">Contest over</span>`;
+    return;
+  }
+  const d = Math.floor(left / 86400), h = Math.floor((left % 86400) / 3600), m = Math.floor((left % 3600) / 60), sec = left % 60;
+  const u = (v, l) => `<span class="cd-u"><b class="num">${String(v).padStart(2, "0")}</b><small>${l}</small></span>`;
+  $("#cdClock").innerHTML = u(d, d === 1 ? "day" : "days") + u(h, "hrs") + u(m, "min") + u(sec, "sec");
+}
+setInterval(tickCountdown, 1000);
 
 async function load() {
   try {
@@ -24,8 +51,10 @@ function render() {
   const leader = R.stores[0];
   const statusTxt = R.status === "upcoming" ? `Kicks off ${fmtDate(st.start_date)}` : R.status === "ended" ? "Final — contest over" : `Day ${R.elapsed_days + 1} of ${R.total_days}`;
   const po = R.payouts;
+  const wtxt = (w) => (Math.abs(w - 100 / 3) < 0.05 ? "⅓" : pct(w, 0));
 
   let h = "";
+  h += countdownHtml(st);
   if (S.demo) h += `<div class="demo-banner">⚠ <b>Demo mode</b> — fake sample numbers, simulated as of ${fmtDate(st.demo_today)}. Admin → Data → "Reset to empty" before launch.</div>`;
 
   // HERO
@@ -46,7 +75,7 @@ function render() {
 
   // STORE BATTLE
   h += `<section class="section"><div class="sec-h"><h2>The <span class="accent">Throwdown</span></h2>
-    <span class="sub">Store vs. store · score = ${st.weight_new}% new units vs. target + ${100 - st.weight_new}% used gross vs. target — size doesn't matter, beating <i>your</i> target does.</span></div>
+    <span class="sub">Store vs. store · score = ${wtxt(R.score_weights.new)} new units + ${wtxt(R.score_weights.used)} used gross + ${wtxt(R.score_weights.appt)} appointments, each vs. <i>your</i> store's target — size doesn't matter, beating your target does. 📅 Appointments count ${apptWindowTxt(st)}.</span></div>
     <div class="battle">${R.stores.map((s, i) => {
       const medal = ["🥇", "🥈", "🥉"][s.rank - 1] || "";
       const bar = (v) => `<div class="bar"><i class="${v >= 100 ? "over" : ""}" style="width:${Math.min(100, v)}%"></i>${R.status === "live" ? `<span class="pace" style="left:${R.pace_pct}%"></span>` : ""}</div>`;
@@ -56,8 +85,9 @@ function render() {
         <div class="score"><b class="num">${s.score.toFixed(1)}%</b><span>of<br>target</span></div>
         <div class="metric"><div class="lab"><span>🚗 New units</span><span><b class="num">${units(s.new)}</b> / ${units(s.new_target)} · ${pct(s.new_pct)}</span></div>${bar(s.new_pct)}</div>
         <div class="metric"><div class="lab"><span>💵 Used gross</span><span><b class="num">${money(s.gross, { k: true })}</b> / ${money(s.used_target, { k: true })} · ${pct(s.used_pct)}</span></div>${bar(s.used_pct)}</div>
+        <div class="metric appt"><div class="lab"><span>📅 Appointments <span class="dim" style="font-size:11px">${apptWindowTxt(st)}</span></span><span><b class="num">${units(s.appts)}</b> / ${units(s.appt_target)} · ${pct(s.appt_pct)}</span></div>${bar(s.appt_pct)}</div>
         <div class="foot"><div class="pot">${po.projecting ? money(s.team_prize) : "🔓 Up for grabs"}<small>${s.team_prize ? `team pot → ${money(s.per_rep_share, { cents: false })}/rep (${s.qualifiers.length} qualified)` : po.projecting ? "no team pot at this spot" : `team pots up for grabs: ${pz.team.filter((x) => x > 0).map((x, i) => ["1st", "2nd", "3rd"][i] + " " + money(x)).join(" · ")}`}</small></div>
-          <div class="avgs">Per rep: <b>${units(s.new_per_rep)}</b> new · <b>${money(s.gross_per_rep, { k: true })}</b> gross<br>${s.headcount} on roster · ${units(s.used_units)} used units</div></div>
+          <div class="avgs">Per rep: <b>${units(s.new_per_rep)}</b> new · <b>${money(s.gross_per_rep, { k: true })}</b> gross · <b>${units(s.appts_per_rep)}</b> appts<br>${s.headcount} on roster · ${units(s.used_units)} used units</div></div>
       </div>`; }).join("")}</div></section>`;
 
   // HIGHLIGHTS
@@ -72,6 +102,8 @@ function render() {
         <div class="who">${H.deal_of_day ? who(H.deal_of_day.person_id) + (H.deal_of_day.split ? ' <span class="dim">(split)</span>' : "") : '<span class="muted">No used deals</span>'}</div></div>
       <div class="card"><div class="ic">🚀</div><div class="k">Top Closer · new units</div><div class="v num">${tc ? units(tc.units) : "—"}</div>
         <div class="who">${tc ? tc.person_ids.slice(0, 2).map(who).join("<br>") + (tc.person_ids.length > 2 ? `<br><span class="muted">+${tc.person_ids.length - 2} more tied</span>` : "") : '<span class="muted">No new units</span>'}</div></div>
+      <div class="card"><div class="ic">📅</div><div class="k">Top Setter · appointments</div><div class="v num">${H.top_setter ? units(H.top_setter.appts) : "—"}</div>
+        <div class="who">${H.top_setter ? H.top_setter.person_ids.slice(0, 2).map(who).join("<br>") + (H.top_setter.person_ids.length > 2 ? `<br><span class="muted">+${H.top_setter.person_ids.length - 2} more tied</span>` : "") : '<span class="muted">No appointments</span>'}</div></div>
       <div class="card"><div class="ic">📈</div><div class="k">Store of the Day</div><div class="v num" style="color:${sod ? sod.color : "#fff"}">+${H.store_of_day ? H.store_of_day.gain.toFixed(1) : 0} pts</div>
         <div class="who">${sod ? `<b>${esc(sod.name)}</b>` : ""}</div></div>
       <div class="card"><div class="ic">🔥</div><div class="k">Hottest streak</div><div class="v num">${hot ? hot.streak + " days" : "—"}</div>
@@ -87,7 +119,8 @@ function render() {
     const prizeFor = (pid) => topPrizes.filter((l) => l.person_id === pid).reduce((a, l) => a + l.amount, 0);
     const lim = window.innerWidth < 640 ? 5 : 10;
     const shown = SHOW_ALL[key] ? rows : rows.slice(0, lim);
-    return `<div class="card lb"><h3>${icon} ${title}</h3><div class="desc">${desc} · Prizes ${prizes.map((x) => money(x)).join(" / ")}</div>
+    const paid = prizes.filter((x) => x > 0);
+    return `<div class="card lb lb-${key}"><h3>${icon} ${title}</h3><div class="desc">${desc} · ${paid.length > 1 ? "Prizes " + paid.map((x) => money(x)).join(" / ") : "Winner takes " + money(paid[0] || 0)}</div>
       ${shown.map((r) => { const s = ST[r.store_id]; const pzv = prizeFor(r.id);
         return `<div class="row ${r.rank <= 3 && r[metric] > 0 ? "p" + r.rank : ""}">
           <div class="rk">${r[metric] > 0 ? (["🥇", "🥈", "🥉"][r.rank - 1] || r.rank) : "–"}</div>
@@ -101,18 +134,20 @@ function render() {
     <div class="boards">
       ${lb("new", "New Unit King", "🏁", "Most new units delivered · splits = 0.5", (r) => units(r.new), "new", pz.new)}
       ${lb("used", "Used Gross Boss", "💰", "Most used-car front gross", (r) => money(r.gross, { k: true }), "gross", pz.used)}
+      ${lb("appt", "Appointment Ace", "📅", `Most appointments set · counts ${apptWindowTxt(st)} only`, (r) => units(r.appts), "appts", pz.appt)}
     </div></section>`;
 
-  // BOUNTIES
-  h += `<section class="section"><div class="sec-h"><h2>Weekly <span class="accent">Bounties</span></h2><span class="sub">Every ${R.bounty_days === 7 ? "week" : R.bounty_days + "-day bounty period"}: 🎯 Top Gun (most new units) ${money(pz.top_gun)} · 🐟 Big Fish (biggest single used deal) ${money(pz.big_fish)}</span></div>
-    <div class="weeks">${R.periods.map((w) => {
+  // DAILY HOT SHOT
+  h += `<section class="section"><div class="sec-h"><h2>Daily <span class="accent">Hot Shot</span></h2><span class="sub">🔥 ${money(pz.hot_shot)} every ${R.bounty_days === 1 ? "day" : R.bounty_days + "-day period"} to the rep with the most Showdown Points (${st.points_new} per new unit + ${st.points_per_1k} per $1,000 used gross + ${st.points_per_appt} per appointment)</span></div>
+    <div class="weeks days5">${R.periods.map((w) => {
       const tag = w.status === "live" ? '<span class="pill live">● Live</span>' : w.status === "won" ? '<span class="pill won">Won</span>' : '<span class="pill">Up for grabs</span>';
       const names = (ids) => ids.map((id) => (P[id] ? `${esc(P[id].name)} <span class="dim">${esc((ST[P[id].store_id] || {}).short || "")}</span>` : "")).join(", ");
-      const line = (ic, k, obj, val, amt) => `<div class="bty"><span class="ic">${ic}</span><div class="t"><div class="k">${k}${obj ? " · " + val : ""}</div>
-        <div class="w">${obj ? names(obj.ids) : w.status === "upcoming" ? '<span class="dim">Starts ' + fmtDate(w.start) + "</span>" : '<span class="dim">Nobody yet</span>'}</div></div><span class="amt">${money(amt)}</span></div>`;
-      return `<div class="card week ${w.status}"><div class="wh"><div><b>Week ${w.n}</b><div class="dim" style="font-size:12px">${fmtDate(w.start, { month: "short", day: "numeric" })} – ${fmtDate(w.end, { month: "short", day: "numeric" })}</div></div>${tag}</div>
-        ${line("🎯", "Top Gun", w.top_gun, w.top_gun ? units(w.top_gun.units) + " units" : "", pz.top_gun)}
-        ${line("🐟", "Big Fish", w.big_fish, w.big_fish ? money(w.big_fish.gross) : "", pz.big_fish)}</div>`; }).join("")}</div></section>`;
+      const hs = w.hot_shot;
+      const title = w.days === 1 ? fmtDate(w.start, { weekday: "short" }) : `Period ${w.n}`;
+      const sub = w.days === 1 ? fmtDate(w.start, { month: "short", day: "numeric" }) : `${fmtDate(w.start, { month: "short", day: "numeric" })} – ${fmtDate(w.end, { month: "short", day: "numeric" })}`;
+      return `<div class="card week ${w.status}"><div class="wh"><div><b>${title}</b><div class="dim" style="font-size:12px">${sub}</div></div>${tag}</div>
+        <div class="bty"><span class="ic">🔥</span><div class="t"><div class="k">Hot Shot${hs ? " · " + hs.points.toFixed(1) + " pts" : ""}</div>
+        <div class="w">${hs ? names(hs.ids) : w.status === "upcoming" ? '<span class="dim">Starts ' + fmtDate(w.start) + "</span>" : '<span class="dim">Nobody yet</span>'}</div></div><span class="amt">${money(pz.hot_shot)}</span></div></div>`; }).join("")}</div></section>`;
 
   // CHARTS
   h += `<section class="section"><div class="sec-h"><h2>The <span class="accent">Race</span></h2><span class="sub">Cumulative store score (% of target) by day vs. the pace line</span></div>
@@ -121,7 +156,7 @@ function render() {
       <div class="card chart">${barChart(R, S.stores)}<div class="legend">${S.stores.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.short)}</span>`).join("")}<span>· daily new units, last 14 days</span></div></div></div></section>`;
 
   // MONEY
-  const cats = [["team", "🏆 Store Battle (team pots)"], ["new", "🏁 New Unit King"], ["used", "💰 Used Gross Boss"], ["mvp", "⭐ Store MVPs"], ["top_gun", "🎯 Top Gun bounties"], ["big_fish", "🐟 Big Fish bounties"]];
+  const cats = [["team", "🏆 Store Battle (team pots)"], ["new", "🏁 New Unit King"], ["used", "💰 Used Gross Boss"], ["appt", "📅 Appointment Ace"], ["mvp", "⭐ Store MVPs"], ["hot_shot", "🔥 Daily Hot Shots"]];
   const catSum = (c) => po.lines.filter((l) => l.cat === c).reduce((a, l) => a + l.amount, 0);
   const earners = Object.entries(po.by_person).map(([pid, v]) => ({ pid: +pid, v })).sort((a, b) => b.v - a.v).slice(0, window.innerWidth < 640 ? 6 : 10);
   const mvps = S.stores.map((s) => ({ s, l: po.lines.filter((l) => l.cat === "mvp" && l.store_id === s.id) }));
@@ -129,9 +164,9 @@ function render() {
   h += `<section class="section"><div class="sec-h"><h2>Show Me The <span class="accent">Money</span></h2><span class="sub">${R.status === "ended" ? "Final payouts" : "If the contest ended today…"} · every dollar of the ${money(po.pool)} is accounted for</span></div>
     <div class="money">
       <div class="card"><table class="ptable"><thead><tr><th>Prize bucket</th><th class="amt">Budget</th><th class="amt">${R.status === "ended" ? "Paid" : "Projected"}</th></tr></thead><tbody>
-        ${cats.map(([c, lab]) => { const b = c === "top_gun" ? po.budget.bounties / 2 : c === "big_fish" ? po.budget.bounties / 2 : po.budget[c];
+        ${cats.map(([c, lab]) => { const b = po.budget[c];
           return `<tr><td>${lab}</td><td class="amt">${money(b)}</td><td class="amt">${money(catSum(c))}</td></tr>`; }).join("")}
-        ${po.up_for_grabs > 0.004 ? `<tr><td class="muted">⏳ ${po.projecting ? "Bounties still up for grabs" : "Up for grabs — nothing sold yet"}</td><td class="amt"></td><td class="amt">${money(po.up_for_grabs)}</td></tr>` : ""}
+        ${po.up_for_grabs > 0.004 ? `<tr><td class="muted">⏳ ${po.projecting ? "Daily Hot Shots still up for grabs" : "Up for grabs — nothing entered yet"}</td><td class="amt"></td><td class="amt">${money(po.up_for_grabs)}</td></tr>` : ""}
         <tr class="total"><td>Total</td><td class="amt">${money(po.budget.total)}</td><td class="amt">${money(po.assigned + po.up_for_grabs)}</td></tr></tbody></table>
         ${po.rollover ? `<p class="muted" style="font-size:13px">Includes ${money(po.rollover)} of unclaimed prizes rolled into the 1st-place store's team pot.</p>` : ""}
         ${!po.budget_ok ? `<p class="bad"><b>⚠ Prize settings (${money(po.budget.total)}) don't match the pool (${money(po.pool)}). Admin needs to fix this.</b></p>` : ""}
@@ -139,20 +174,20 @@ function render() {
         <div class="mvps">${mvps.map(({ s, l }) => `<div class="mvp" style="--c:${s.color}"><span class="ic">⭐</span><div><div class="dim cond" style="font-size:12px">${esc(s.name)}</div>
           <div class="n">${l.length ? l.map((x) => esc(P[x.person_id].name)).join(" & ") : "—"}</div></div>
           <div class="v"><b class="num">${l.length ? ptsBy[l[0].person_id].toFixed(1) : 0}</b><div class="dim" style="font-size:12px">points</div></div></div>`).join("")}</div>
-        <p class="dim" style="font-size:12px;margin-top:8px">Showdown Points = ${st.points_new} per new unit + ${st.points_per_1k} per $1,000 used gross.</p></div>
+        <p class="dim" style="font-size:12px;margin-top:8px">Showdown Points = ${st.points_new} per new unit + ${st.points_per_1k} per $1,000 used gross + ${st.points_per_appt} per appointment (${apptWindowTxt(st)}).</p></div>
       <div class="card lb"><h3>🤑 Who's Getting Paid</h3><div class="desc">Projected total earnings per rep across every prize</div>
         ${earners.map((e, i) => { const p = P[e.pid]; const s = ST[p.store_id];
           return `<div class="row ${i === 0 ? "p1" : ""}"><div class="rk">${i + 1}</div><div><div class="nm">${esc(p.name)} ${chip(p.store_id)}</div>
-            <div class="sub dim" style="font-size:12px">${po.lines.filter((l) => l.person_id === e.pid).map((l) => ({ team: "🏆 ", new: "🏁 New Units ", used: "💰 Used Gross ", mvp: "⭐ ", top_gun: "🎯 ", big_fish: "🐟 " }[l.cat] || "") + esc(l.label)).join(" · ")}</div></div>
+            <div class="sub dim" style="font-size:12px">${po.lines.filter((l) => l.person_id === e.pid).map((l) => ({ team: "🏆 ", new: "🏁 New Units ", used: "💰 Used Gross ", appt: "📅 Appointments ", mvp: "⭐ ", hot_shot: "🔥 " }[l.cat] || "") + esc(l.label)).join(" · ")}</div></div>
             <div class="val"><b class="num gold">${money(e.v, { cents: false })}</b></div></div>`; }).join("") || '<p class="muted">No payouts yet — go sell something!</p>'}
       </div></div></section>`;
 
   // HOW IT WORKS
   h += `<section class="section"><div class="sec-h"><h2>How To <span class="accent">Win</span></h2><span class="sub"><a href="/Spiff_Rules.pdf" target="_blank">Full rules sheet (PDF)</a></span></div>
     <div class="how">
-      <div class="card"><h4>🏆 Store Battle</h4><p>Your store's score = % of its own new-unit target and used-gross target. 1st place store: ${money(pz.team[0])} team pot, 2nd: ${money(pz.team[1])}, split evenly by every rep with ${st.qualifier_units}+ unit.</p></div>
-      <div class="card"><h4>🏁 💰 Individual</h4><p>Top 3 in new units win ${pz.new.map((x) => money(x)).join("/")}; top 3 in used gross win ${pz.used.map((x) => money(x)).join("/")}. All stores on one board.</p></div>
-      <div class="card"><h4>🎯 🐟 Weekly Bounties</h4><p>Every contest week: most new units wins ${money(pz.top_gun)}; biggest single used gross deal wins ${money(pz.big_fish)}.</p></div>
+      <div class="card"><h4>🏆 Store Battle</h4><p>Your store's score = % of its own targets for new units, used gross and appointments (${wtxt(R.score_weights.new)} / ${wtxt(R.score_weights.used)} / ${wtxt(R.score_weights.appt)}). 1st place store: ${money(pz.team[0])} team pot, 2nd: ${money(pz.team[1])}, split evenly by every rep with ${st.qualifier_units}+ unit.</p></div>
+      <div class="card"><h4>🏁 💰 📅 Individual</h4><p>New Unit King ${pz.new.filter((x) => x > 0).map((x) => money(x)).join("/")} · Used Gross Boss ${pz.used.filter((x) => x > 0).map((x) => money(x)).join("/")} · Appointment Ace ${pz.appt.filter((x) => x > 0).map((x) => money(x)).join("/")} (appointments ${apptWindowTxt(st)}). All stores on one board.</p></div>
+      <div class="card"><h4>🔥 Daily Hot Shot</h4><p>Every contest day: most Showdown Points that day wins ${money(pz.hot_shot)}.</p></div>
       <div class="card"><h4>⭐ Store MVP</h4><p>Most Showdown Points at your own store wins ${money(pz.mvp)} — every store crowns one.</p></div>
     </div>
     <div class="card" style="margin-top:12px"><div class="badge-legend">${Object.values(R.badges).map((b) => `<span>${b.icon} <b>${esc(b.name)}</b> <span class="muted">— ${esc(b.desc)}</span></span>`).join("")}</div></div>
@@ -160,6 +195,7 @@ function render() {
   <footer class="foot">Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · refreshes every minute · Splits count 0.5 · Unwinds are removed</footer>`;
 
   $("#app").innerHTML = h;
+  tickCountdown();
   $$("[data-more]").forEach((b) => (b.onclick = () => { SHOW_ALL[b.dataset.more] = !SHOW_ALL[b.dataset.more]; render(); }));
 }
 
@@ -173,7 +209,7 @@ function lineChart(R, stores) {
   const y = (v) => Tp + (1 - v / maxY) * (H - Tp - B);
   let g = "";
   for (let v = 0; v <= maxY; v += 25) g += `<line x1="${L}" x2="${W - Rm}" y1="${y(v)}" y2="${y(v)}" stroke="rgba(255,255,255,${v === 100 ? 0.25 : 0.07})"/><text x="${L - 6}" y="${y(v) + 4}" fill="#64708f" font-size="11" text-anchor="end">${v}%</text>`;
-  for (let i = 0; i < n; i += m ? 10 : 7) g += `<text x="${x(i)}" y="${H - 8}" fill="#64708f" font-size="11" text-anchor="middle">${fmtDate(addDays(R.trend.dates[0], i), { month: "short", day: "numeric" })}</text>`;
+  for (let i = 0; i < n; i += n <= 10 ? 1 : m ? 10 : 7) g += `<text x="${x(i)}" y="${H - 8}" fill="#64708f" font-size="11" text-anchor="middle">${fmtDate(addDays(R.trend.dates[0], i), { month: "short", day: "numeric" })}</text>`;
   const fullPace = Array.from({ length: n }, (_, i) => ((i + 1) / n) * 100);
   g += `<polyline fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="2" stroke-dasharray="5 6" points="${fullPace.map((v, i) => `${x(i)},${y(v)}`).join(" ")}"/>`;
   stores.forEach((s) => {

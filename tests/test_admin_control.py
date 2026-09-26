@@ -115,7 +115,7 @@ class AdminControlTest(unittest.TestCase):
         s1b = self.store(self.state(), 1)
         self.assertAlmostEqual(s1b["new_pct"], round(5 / 35 * 100, 2))
         self.assertAlmostEqual(s1b["used_pct"], round(3000 / 150000 * 100, 2))
-        self.assertAlmostEqual(s1b["score"], round((5 / 35 * 0.5 + 3000 / 150000 * 0.5) * 100, 2))
+        self.assertAlmostEqual(s1b["score"], round((5 / 35 + 3000 / 150000 + 0 / 60) / 3 * 100, 2))   # equal thirds
         self.assertEqual(s1b["new_target"], 35)
         # trend chart uses the new targets for the whole history (derived, not stored)
         t = self.state()["trend"]
@@ -149,11 +149,13 @@ class AdminControlTest(unittest.TestCase):
         res = self.state()
         top = res["leaderboards"]["new"][0]["id"]
         # prize amounts
-        self.admin.req("PUT", "/api/admin/settings", {"prizes": {"new": [1500, 300, 200], "top_gun": 150, "big_fish": 100}})
+        self.admin.req("PUT", "/api/admin/settings", {"prizes": {"new": [1500, 300, 200], "hot_shot": 200, "appt": [1000, 500, 0]}})
         res = self.state()
         line = next(l for l in res["payouts"]["lines"] if l["cat"] == "new" and l["person_id"] == top)
         self.assertEqual(line["amount"], 1500)
         self.assertEqual(res["payouts"]["budget"]["new"], 2000)
+        self.assertEqual(res["payouts"]["budget"]["appt"], 1500)
+        self.assertEqual(res["payouts"]["budget"]["hot_shot"], 200 * len(res["periods"]))
         # dates + bounty length
         new_end = (date.fromisoformat(self.end) + timedelta(days=5)).isoformat()
         st, r = self.admin.req("PUT", "/api/admin/settings", {"end_date": new_end, "bounty_days": 10})

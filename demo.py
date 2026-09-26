@@ -7,7 +7,7 @@ from calc import to_date
 STORE_FLAVOR = {0: (0.31, 0.25, 2300), 1: (0.26, 0.2, 2150), 2: (0.3, 0.23, 2250)}
 
 
-def generate(stores, people, start, demo_today, closed_sundays=True, seed=2026):
+def generate(stores, people, start, demo_today, closed_sundays=True, seed=2026, appt_window=None):
     rng = random.Random(seed)
     start, demo_today = to_date(start), to_date(demo_today)
     deals = []
@@ -48,5 +48,11 @@ def generate(stores, people, start, demo_today, closed_sundays=True, seed=2026):
                         g = round(g / 2)
                     deals.append({"sp_id": p["id"], "store_id": p["store_id"], "date": day.isoformat(),
                                   "kind": "used", "units": 0.5 if split else 1.0, "gross": g})
+            # appointments set (only inside the appointment window)
+            if appt_window and appt_window[0] <= day <= appt_window[1]:
+                n = sum(1 for _ in range(4) if rng.random() < 0.45 * skill[p["id"]])
+                if n:
+                    deals.append({"sp_id": p["id"], "store_id": p["store_id"], "date": day.isoformat(),
+                                  "kind": "appt", "units": float(n), "gross": 0})
         day += timedelta(days=1)
     return deals

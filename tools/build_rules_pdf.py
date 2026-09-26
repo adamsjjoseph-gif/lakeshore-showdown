@@ -84,7 +84,7 @@ def main():
     body = md_to_html(md)
     page = f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lakeshore Showdown: Rules</title><style>{CSS}</style></head><body><div class="sheet">{body}
-<div class="foot"><span>[A] = assumption to confirm · Standings, payouts and CSV exports on the Admin page</span><span>Lakeshore Showdown · Oct 2026</span></div></div></body></html>"""
+<div class="foot"><span>[A] = assumption to confirm · Standings, payouts and CSV exports on the Admin page</span><span>Lakeshore Showdown · Sep 26–30, 2026</span></div></div></body></html>"""
     out_html = os.path.join(ROOT, "static", "rules.html")
     open(out_html, "w", encoding="utf-8").write(page)
     base = sys.argv[1] if len(sys.argv) > 1 else None
