@@ -1,0 +1,8 @@
+data/
+screenshots/
+tests/
+tools/
+*.db
+*.db-*
+__pycache__/
+.git/

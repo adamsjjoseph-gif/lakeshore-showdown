@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060a14"><title>Admin — Lakeshore Showdown</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css">
+<style>
+  .adm { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .adm .full { grid-column: 1 / -1; }
+  .card h3 { margin: 0 0 12px; font-family: var(--display); font-style: italic; font-weight: 800; font-size: 26px; text-transform: uppercase; display: flex; gap: 10px; align-items: center; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .fields .wide { grid-column: span 2; }
+  .status { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }
+  .status .card { padding: 14px 16px; }
+  .status .k { font-family: var(--cond); font-weight: 700; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .status .v { font-family: var(--display); font-style: italic; font-weight: 800; font-size: 36px; line-height: 1.05; }
+  .budget { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 12px; padding: 12px 14px; border-radius: 12px; font-weight: 700; }
+  .budget.ok { background: rgba(47,227,154,.1); border: 1px solid rgba(47,227,154,.4); color: #bff5dc; }
+  .budget.bad { background: rgba(255,77,109,.1); border: 1px solid rgba(255,77,109,.45); color: #ffd0da; }
+  .rosters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .roster { border-top: 4px solid var(--c); }
+  .roster h4 { margin: 0 0 8px; font-family: var(--display); font-style: italic; font-weight: 800; font-size: 22px; text-transform: uppercase; }
+  .rp { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .rp input[type=text] { flex: 1; }
+  .rp.off input[type=text] { opacity: .5; text-decoration: line-through; }
+  .ph { font-size: 10px; font-family: var(--cond); letter-spacing: .08em; text-transform: uppercase; color: var(--warn); border: 1px solid rgba(255,176,32,.5); border-radius: 5px; padding: 1px 5px; }
+  .srow > *, .fields > *, .rosters > *, .adm > * { min-width: 0; }
+  .rp input[type=text] { min-width: 0; width: 100%; }
+  .srow { display: grid; grid-template-columns: 1.4fr 1fr 70px 100px 130px 110px auto; gap: 8px; align-items: end; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .srow:last-child { border-bottom: 0; }
+  input[type=color] { padding: 2px; height: 40px; width: 100%; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .routine { margin-top: 16px; display: flex; gap: 18px; border: 1px solid rgba(255,210,63,.45); background: linear-gradient(135deg, rgba(255,210,63,.12), rgba(255,61,110,.06) 60%, transparent), linear-gradient(180deg, var(--card2), var(--card)); }
+  .routine ol { margin: 4px 0 0; padding-left: 20px; } .routine li { margin: 4px 0; color: var(--muted); } .routine li b { color: var(--text); } .routine a { color: var(--gold); }
+  @media (max-width: 900px) { .routine { flex-direction: column; } }
+  .audit { max-height: 320px; overflow: auto; font-size: 13px; }
+  .audit td { padding: 5px 8px; }
+  .pinrow { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; margin-bottom: 12px; }
+  .pinrow input { width: 120px; }
+  @media (max-width: 900px) { .adm, .rosters { grid-template-columns: 1fr; } .status { grid-template-columns: 1fr 1fr; } .srow { grid-template-columns: 1fr 1fr; } }
+</style></head><body>
+<main class="wrap" id="app"><div class="display" style="font-size:36px;text-align:center;padding:100px 0;color:var(--muted)">Loading…</div></main>
+<script src="/common.js"></script><script src="/admin.js"></script>
+</body></html>

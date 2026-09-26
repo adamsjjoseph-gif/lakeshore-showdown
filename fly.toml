@@ -1,0 +1,23 @@
+# Fly.io config. Run `fly launch --copy-config --no-deploy`, then `fly volumes create showdown_data --size 1`, then `fly deploy`.
+app = "lakeshore-showdown"
+primary_region = "ord"
+
+[build]
+
+[env]
+  PORT = "8080"
+  DB_PATH = "/data/spiff.db"
+
+[mounts]
+  source = "showdown_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

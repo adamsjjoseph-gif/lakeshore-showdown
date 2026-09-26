@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#060a14"><title>Enter PIN — Lakeshore Showdown</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css">
+<style>
+  .box { max-width: 380px; margin: 40px auto; text-align: center; }
+  .box h1 { font-family: var(--display); font-style: italic; font-weight: 800; font-size: 44px; text-transform: uppercase; margin: 8px 0 4px; line-height: 1; }
+  .dots { display: flex; justify-content: center; gap: 12px; margin: 22px 0; min-height: 22px; }
+  .dots i { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--muted); }
+  .dots i.f { background: var(--gold); border-color: var(--gold); box-shadow: 0 0 12px var(--gold); }
+  .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .pad button { font-family: var(--display); font-style: italic; font-weight: 800; font-size: 34px; padding: 16px 0; border-radius: 16px; border: 1px solid var(--line);
+    background: linear-gradient(180deg, var(--card2), var(--card)); color: var(--text); cursor: pointer; }
+  .pad button:active { transform: scale(.96); background: var(--gold); color: #000; }
+  .pad .go { background: linear-gradient(135deg, var(--gold), var(--gold2)); color: #1a1000; }
+  .err { color: var(--bad); min-height: 22px; font-weight: 700; }
+</style></head><body>
+<main class="wrap"><div class="box card">
+  <div style="font-size:44px">⚡</div>
+  <h1>Enter your PIN</h1>
+  <div class="muted" id="why">Store managers: your store PIN. Admin: admin PIN.</div>
+  <div class="dots" id="dots"></div>
+  <div class="err" id="err"></div>
+  <div class="pad" id="pad"></div>
+  <input id="hidden" inputmode="numeric" autocomplete="one-time-code" aria-label="PIN" style="position:absolute;opacity:0;pointer-events:none;width:1px">
+</div></main>
+<script src="/common.js"></script>
+<script>
+  const next = new URLSearchParams(location.search).get("next") || "/";
+  let pin = "";
+  topbar("", null, "Sales Spiff");
+  if (next === "/") $("#why").textContent = "This leaderboard is PIN-protected. Ask your manager for the view PIN.";
+  const dots = () => { $("#dots").innerHTML = Array.from({ length: Math.max(4, pin.length) }, (_, i) => `<i class="${i < pin.length ? "f" : ""}"></i>`).join(""); };
+  const keys = ["1","2","3","4","5","6","7","8","9","⌫","0","GO"];
+  $("#pad").innerHTML = keys.map((k) => `<button class="${k === "GO" ? "go" : ""}" data-k="${k}">${k}</button>`).join("");
+  async function submit() {
+    if (pin.length < 4) return;
+    try {
+      const r = await api("/api/login", { method: "POST", body: { pin } });
+      let dest = next;
+      if (next === "/login" || (r.role === "view" && next !== "/")) dest = "/";
+      location.href = dest;
+    } catch (e) { $("#err").textContent = e.message; pin = ""; dots(); }
+  }
+  function press(k) {
+    $("#err").textContent = "";
+    if (k === "⌫") pin = pin.slice(0, -1); else if (k === "GO") return submit(); else if (pin.length < 8) pin += k;
+    dots();
+  }
+  $$("#pad button").forEach((b) => (b.onclick = () => press(b.dataset.k)));
+  document.addEventListener("keydown", (e) => { if (/^\d$/.test(e.key)) press(e.key); else if (e.key === "Backspace") press("⌫"); else if (e.key === "Enter") press("GO"); });
+  dots();
+</script></body></html>
