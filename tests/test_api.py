@@ -45,7 +45,7 @@ class ApiTest(unittest.TestCase):
         cls.tmp = tempfile.mkdtemp()
         cls.port = free_port()
         env = {**os.environ, "PORT": str(cls.port), "DB_PATH": os.path.join(cls.tmp, "t.db"), "SEED_DEMO": "0",
-               "ADMIN_PIN": "8642", "STORE_PIN_1": "1357", "STORE_PIN_2": "2468", "STORE_PIN_3": "3579", "QUIET": "1"}
+               "ADMIN_PIN": "8642", "STORE_PIN_1": "1357", "STORE_PIN_2": "2468", "QUIET": "1"}
         env.pop("VIEW_PIN", None)
         cls.proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py")], env=env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -78,9 +78,9 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(c.login("8642")[0], 200)
         return c
 
-    def store(self, n):
+    def store(self, n=1):
         c = Client(self.base)
-        st, r = c.login({1: "1357", 2: "2468", 3: "3579"}[n])
+        st, r = c.login({1: "1357"}[n])
         self.assertEqual(st, 200)
         self.assertEqual(r["role"], "store")
         return c
@@ -94,7 +94,10 @@ class ApiTest(unittest.TestCase):
         c = Client(self.base)
         st, r = c.req("GET", "/api/state")
         self.assertEqual(st, 200)
-        self.assertEqual(r["result"]["payouts"]["pool"], 10500)
+        self.assertEqual(r["result"]["payouts"]["pool"], 3000)
+        self.assertEqual([x["name"] for x in r["stores"]], ["Chrysler Muskegon"])
+        self.assertEqual([p["name"] for p in r["people"]], ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem"])
+        self.assertEqual(c.login("2468")[0], 401)          # a leftover STORE_PIN_2 env var does nothing (no 2nd store)
         self.assertEqual(c.req("GET", "/api/entry/1")[0], 401)
         self.assertEqual(c.req("POST", "/api/entry/1/grid", {"date": self.yday, "rows": []})[0], 401)
         self.assertEqual(c.req("GET", "/api/admin")[0], 401)
@@ -111,7 +114,7 @@ class ApiTest(unittest.TestCase):
         ids = self.roster(1)
         st, r = c.req("GET", "/api/entry/1")
         self.assertEqual(st, 200)
-        self.assertEqual(len(r["grid"]), 7)
+        self.assertEqual(len(r["grid"]), 6)
         rows = [{"sp_id": ids[0], "new": 2, "used": [{"gross": 2500}, {"gross": 1200, "split": True}]},
                 {"sp_id": ids[1], "new": 0.5, "used": []}]
         st, r = c.req("POST", "/api/entry/1/grid", {"date": self.yday, "rows": rows})
@@ -133,41 +136,41 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(g[ids[1]]["new"], 0.5)  # untouched row preserved
 
     def test_04_single_entry_add_edit_delete(self):
-        c = self.store(2)
-        ids = self.roster(2)
-        st, r = c.req("POST", "/api/entry/2/deal", {"sp_id": ids[3], "date": self.yday, "kind": "used", "gross": 3100})
+        c = self.store(1)
+        ids = self.roster(1)
+        st, r = c.req("POST", "/api/entry/1/deal", {"sp_id": ids[3], "date": self.yday, "kind": "used", "gross": 3100})
         self.assertEqual(st, 200)
         did = r["id"]
         st, _ = c.req("PUT", f"/api/deals/{did}", {"sp_id": ids[3], "date": self.yday, "kind": "used", "gross": 3300, "split": True})
         self.assertEqual(st, 200)
-        _, e = c.req("GET", f"/api/entry/2?date={self.yday}")
+        _, e = c.req("GET", f"/api/entry/1?date={self.yday}")
         d = next(x for x in e["recent"] if x["id"] == did)
         self.assertEqual((d["gross"], d["units"]), (3300, 0.5))
-        # another store can't edit or delete it
-        self.assertEqual(self.store(3).req("DELETE", f"/api/deals/{did}")[0], 403)
+        # a signed-out visitor can't edit or delete it
+        self.assertEqual(Client(self.base).req("DELETE", f"/api/deals/{did}")[0], 401)
         # unwind -> delete
         self.assertEqual(c.req("DELETE", f"/api/deals/{did}")[0], 200)
-        _, e = c.req("GET", f"/api/entry/2?date={self.yday}")
+        _, e = c.req("GET", f"/api/entry/1?date={self.yday}")
         self.assertFalse([x for x in e["recent"] if x["id"] == did])
 
     def test_05_validation(self):
-        c = self.store(3)
-        ids = self.roster(3)
-        other = self.roster(1)[0]
+        c = self.store(1)
+        ids = self.roster(1)
+        other = 9999
         bad = [
             {"date": self.yday, "rows": [{"sp_id": ids[0], "new": 0.3}]},                       # not a half step
             {"date": (self.today + timedelta(days=1)).isoformat(), "rows": [{"sp_id": ids[0], "new": 1}]},  # future
             {"date": "2020-01-01", "rows": [{"sp_id": ids[0], "new": 1}]},                      # outside contest
-            {"date": self.yday, "rows": [{"sp_id": other, "new": 1}]},                          # other store's rep
+            {"date": self.yday, "rows": [{"sp_id": other, "new": 1}]},                          # not on the roster
             {"date": self.yday, "rows": [{"sp_id": ids[0], "new": 1, "used": [{"gross": "abc"}]}]},
         ]
         for b in bad:
-            st, r = c.req("POST", "/api/entry/3/grid", b)
+            st, r = c.req("POST", "/api/entry/1/grid", b)
             self.assertEqual(st, 400, (b, r))
 
     def test_06_admin_roster_pins_export_reset(self):
         a = self.admin()
-        st, r = a.req("POST", "/api/admin/people", {"store_id": 3, "name": "New Hire"})
+        st, r = a.req("POST", "/api/admin/people", {"store_id": 1, "name": "New Hire"})
         self.assertEqual(st, 200)
         pid = r["id"]
         self.assertEqual(a.req("PUT", f"/api/admin/people/{pid}", {"name": "Jane Closer"})[0], 200)
@@ -177,15 +180,17 @@ class ApiTest(unittest.TestCase):
         self.assertEqual((p["name"], p["active"]), ("Jane Closer", 0))
         self.assertEqual(a.req("DELETE", f"/api/admin/people/{pid}")[0], 200)
         # PINs: must be unique and 4-8 digits; stored hashed
-        self.assertEqual(a.req("POST", "/api/admin/pin", {"which": "store", "store_id": 3, "pin": "1357"})[0], 400)
-        self.assertEqual(a.req("POST", "/api/admin/pin", {"which": "store", "store_id": 3, "pin": "12"})[0], 400)
-        self.assertEqual(a.req("POST", "/api/admin/pin", {"which": "store", "store_id": 3, "pin": "3580"})[0], 200)
-        self.assertEqual(Client(self.base).login("3579")[0], 401)
+        self.assertEqual(a.req("POST", "/api/admin/pin", {"which": "store", "store_id": 1, "pin": "8642"})[0], 400)
+        self.assertEqual(a.req("POST", "/api/admin/pin", {"which": "store", "store_id": 1, "pin": "12"})[0], 400)
+        self.assertEqual(a.req("POST", "/api/admin/pin", {"which": "store", "store_id": 2, "pin": "4444"})[0], 400)  # no 2nd store
+        self.assertEqual(a.req("POST", "/api/admin/pin", {"which": "store", "store_id": 1, "pin": "3580"})[0], 200)
+        self.assertEqual(Client(self.base).login("1357")[0], 401)
         self.assertEqual(Client(self.base).login("3580")[0], 200)
         import sqlite3
         con = sqlite3.connect(os.path.join(self.tmp, "t.db"))
-        h = con.execute("SELECT pin_hash FROM stores WHERE id=3").fetchone()[0]
+        h = con.execute("SELECT pin_hash FROM stores WHERE id=1").fetchone()[0]
         self.assertTrue(h.startswith("pbkdf2$") and "3580" not in h)
+        self.assertEqual(a.req("POST", "/api/admin/pin", {"which": "store", "store_id": 1, "pin": "1357"})[0], 200)
         # CSV export
         st, text = a.req("GET", "/api/admin/export/deals.csv")
         self.assertEqual(st, 200)
@@ -214,76 +219,80 @@ class ApiTest(unittest.TestCase):
         a = self.admin()
         _, adm = a.req("GET", "/api/admin")
         n = adm["periods"]
-        # make the daily Hot Shot fill the rest of the pool exactly: 10500 - 3500 - 2000 - 2000 - 1500 - 750 = 750 over n days
-        st, _ = a.req("PUT", "/api/admin/settings", {"prizes": {"hot_shot": 750 / n}})
+        # make the daily Hot Shot fill the rest of the pool exactly: 3000 - 1175 - 575 - 575 - 425 = 250 over n days
+        st, _ = a.req("PUT", "/api/admin/settings", {"prizes": {"hot_shot": 250 / n}})
         self.assertEqual(st, 200)
         _, adm = a.req("GET", "/api/admin")
-        self.assertAlmostEqual(adm["budget"]["total"], 10500, places=0)
-        self.assertEqual(adm["settings"]["prizes"]["appt"], [1500, 0, 0])
-        # put it back to the real $150/day
-        self.assertEqual(a.req("PUT", "/api/admin/settings", {"prizes": {"hot_shot": 150}})[0], 200)
+        self.assertAlmostEqual(adm["budget"]["total"], 3000, places=0)
+        self.assertEqual(adm["settings"]["prizes"]["appt"], [425, 0, 0])
+        self.assertNotIn("team", adm["settings"]["prizes"])
+        # put it back to the real $50/day
+        self.assertEqual(a.req("PUT", "/api/admin/settings", {"prizes": {"hot_shot": 50}})[0], 200)
 
     def test_00_fresh_defaults_are_the_5_day_contest(self):
         s = self.fresh["settings"]
         self.assertEqual((s["start_date"], s["end_date"]), ("2026-09-26", "2026-09-30"))
         self.assertEqual((s["appt_start"], s["appt_end"]), ("2026-09-26", "2026-09-29"))
-        self.assertEqual(s["prizes"], {"team": [2500, 1000, 0], "new": [2000, 0, 0], "used": [2000, 0, 0],
-                                       "appt": [1500, 0, 0], "mvp": 250, "hot_shot": 150})
+        self.assertEqual(s["prizes"], {"points": [900, 275, 0], "new": [575, 0, 0], "used": [575, 0, 0],
+                                       "appt": [425, 0, 0], "hot_shot": 50})
+        self.assertEqual(s["tagline"], "6 closers · 5 days · $3,000 on the line")
         self.assertEqual(self.fresh["periods"], 5)
         self.assertTrue(self.fresh["budget_ok"])
-        self.assertEqual(self.fresh["budget"]["total"], 10500)
-        self.assertEqual(self.fresh["pool"], 10500)
-        self.assertEqual([st["appt_target"] for st in self.fresh["stores"]], [60, 48, 56])
-        self.assertEqual([(st["new_target"], st["used_target"]) for st in self.fresh["stores"]],
-                         [(70, 140000), (55, 110000), (65, 130000)])
+        self.assertEqual(self.fresh["budget"]["total"], 3000)
+        self.assertEqual(self.fresh["pool"], 3000)
+        self.assertEqual([st["name"] for st in self.fresh["stores"]], ["Chrysler Muskegon"])
+        self.assertEqual([st["appt_target"] for st in self.fresh["stores"]], [60])
+        self.assertEqual([(st["new_target"], st["used_target"]) for st in self.fresh["stores"]], [(70, 140000)])
+        self.assertEqual([(p["name"], p["placeholder"]) for p in self.fresh["people"]],
+                         [(n, 0) for n in ("Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem")])
         self.assertIn("db_dir_is_mount", self.fresh["storage"])
         # countdown target: Sep 30 2026 11:59:59 PM Eastern (EDT = UTC-4) -> Oct 1 03:59:59 UTC
         _, st = Client(self.base).req("GET", "/api/state")
         self.assertIn("end_ts", st["settings"])
 
     def test_04b_appointments_entry_leaderboard_and_edit(self):
-        c = self.store(2)
-        ids = self.roster(2)
+        c = self.store(1)
+        ids = self.roster(1)
         rows = [{"sp_id": ids[0], "new": 1, "appt": 4, "used": []}, {"sp_id": ids[1], "new": 0, "appt": 2, "used": [{"gross": 1500}]}]
-        st, r = c.req("POST", "/api/entry/2/grid", {"date": self.yday, "rows": rows})
+        st, r = c.req("POST", "/api/entry/1/grid", {"date": self.yday, "rows": rows})
         self.assertEqual(st, 200, r)
         g = {x["sp_id"]: x for x in r["grid"]}
         self.assertEqual((g[ids[0]]["appt"], g[ids[1]]["appt"]), (4, 2))
         _, s = c.req("GET", "/api/state")
-        store2 = next(x for x in s["result"]["stores"] if x["id"] == 2)
-        self.assertEqual(store2["appts"], 6)
-        self.assertAlmostEqual(store2["appt_pct"], round(6 / 48 * 100, 2))
+        store1 = next(x for x in s["result"]["stores"] if x["id"] == 1)
+        self.assertEqual(store1["appts"], 6)
+        self.assertAlmostEqual(store1["appt_pct"], round(6 / 60 * 100, 2))
         top = s["result"]["leaderboards"]["appt"][0]
         self.assertEqual((top["id"], top["appts"]), (ids[0], 4))
         # a row saved without an "appt" key (older page) keeps that day's appointments
-        st, r = c.req("POST", "/api/entry/2/grid", {"date": self.yday, "rows": [{"sp_id": ids[0], "new": 2, "used": []}]})
+        st, r = c.req("POST", "/api/entry/1/grid", {"date": self.yday, "rows": [{"sp_id": ids[0], "new": 2, "used": []}]})
         self.assertEqual({x["sp_id"]: x for x in r["grid"]}[ids[0]]["appt"], 4)
         # appointments must be whole numbers
-        self.assertEqual(c.req("POST", "/api/entry/2/grid", {"date": self.yday, "rows": [{"sp_id": ids[0], "appt": 1.5}]})[0], 400)
-        self.assertEqual(c.req("POST", "/api/entry/2/grid", {"date": self.yday, "rows": [{"sp_id": ids[0], "appt": -1}]})[0], 400)
+        self.assertEqual(c.req("POST", "/api/entry/1/grid", {"date": self.yday, "rows": [{"sp_id": ids[0], "appt": 1.5}]})[0], 400)
+        self.assertEqual(c.req("POST", "/api/entry/1/grid", {"date": self.yday, "rows": [{"sp_id": ids[0], "appt": -1}]})[0], 400)
         # single entry + admin edit/delete of an appointment row
-        st, r = c.req("POST", "/api/entry/2/deal", {"sp_id": ids[2], "date": self.yday, "kind": "appt", "units": 3})
+        st, r = c.req("POST", "/api/entry/1/deal", {"sp_id": ids[2], "date": self.yday, "kind": "appt", "units": 3})
         self.assertEqual(st, 200)
         did = r["id"]
         a = self.admin()
         self.assertEqual(a.req("PUT", f"/api/deals/{did}", {"sp_id": ids[2], "date": self.yday, "kind": "appt", "units": 5})[0], 200)
         _, s = a.req("GET", "/api/state")
-        self.assertEqual(next(x for x in s["result"]["stores"] if x["id"] == 2)["appts"], 11)
+        self.assertEqual(next(x for x in s["result"]["stores"] if x["id"] == 1)["appts"], 11)
         self.assertEqual(a.req("DELETE", f"/api/deals/{did}")[0], 200)
         # clearing appointments to 0 removes the row
-        c.req("POST", "/api/entry/2/grid", {"date": self.yday, "rows": [{"sp_id": ids[0], "new": 2, "appt": 0, "used": []},
+        c.req("POST", "/api/entry/1/grid", {"date": self.yday, "rows": [{"sp_id": ids[0], "new": 2, "appt": 0, "used": []},
                                                                         {"sp_id": ids[1], "new": 0, "appt": 0, "used": []}]})
         _, s = a.req("GET", "/api/state")
-        self.assertEqual(next(x for x in s["result"]["stores"] if x["id"] == 2)["appts"], 0)
+        self.assertEqual(next(x for x in s["result"]["stores"] if x["id"] == 1)["appts"], 0)
         # appointment window + targets are admin settings
         self.assertEqual(a.req("PUT", "/api/admin/settings", {"appt_start": self.yday, "appt_end": self.start})[0], 400)
-        st, _ = a.req("PUT", "/api/admin/stores/2", {"name": "Chrysler Grand Haven", "short": "CJDR Grand Haven", "color": "#f59e0b",
-                                                     "new_target": 55, "used_target": 110000, "appt_target": 50, "contribution": 3500})
+        st, _ = a.req("PUT", "/api/admin/stores/1", {"name": "Chrysler Muskegon", "short": "CJDR Muskegon", "color": "#e11d48",
+                                                     "new_target": 70, "used_target": 140000, "appt_target": 50, "contribution": 3000})
         self.assertEqual(st, 200)
         _, adm = a.req("GET", "/api/admin")
-        self.assertEqual(next(x for x in adm["stores"] if x["id"] == 2)["appt_target"], 50)
-        a.req("PUT", "/api/admin/stores/2", {"name": "Chrysler Grand Haven", "short": "CJDR Grand Haven", "color": "#f59e0b",
-                                             "new_target": 55, "used_target": 110000, "appt_target": 48, "contribution": 3500})
+        self.assertEqual(next(x for x in adm["stores"] if x["id"] == 1)["appt_target"], 50)
+        a.req("PUT", "/api/admin/stores/1", {"name": "Chrysler Muskegon", "short": "CJDR Muskegon", "color": "#e11d48",
+                                             "new_target": 70, "used_target": 140000, "appt_target": 60, "contribution": 3000})
 
     def test_08_rate_limit(self):
         c = Client(self.base)

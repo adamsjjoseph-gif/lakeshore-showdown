@@ -37,7 +37,7 @@ const apptWinTxt = () => `${mdTxt(D.appt_start)} – ${mdTxt(D.appt_end)}`;
 const dirtyRows = () => { const o = JSON.parse(ORIG); return GRID.map(ser).filter((r, i) => JSON.stringify(r) !== JSON.stringify(o[i])); };
 
 function tabsHtml() {
-  if (!isAdmin()) return "";
+  if (!isAdmin() || D.stores.length <= 1) return "";   // single store: no store tabs
   const st = {}; (D.day_status || []).forEach((x) => (st[x.store_id] = x.rows));
   const done = D.stores.filter((s) => st[s.id] > 0).length;
   const tab = (id, label, color, extra) => `<button class="tab ${STORE_ID === id ? "on" : ""}" data-tab="${id}" style="--c:${color}">
@@ -50,7 +50,8 @@ function tabsHtml() {
 
 function render() {
   const all = STORE_ID === "all";
-  const s = all ? { name: "All stores", color: "#ffd23f" } : D.store;
+  const single = D.stores.length <= 1;
+  const s = all ? (single && D.stores[0] ? D.stores[0] : { name: "All stores", color: "#ffd23f" }) : D.store;
   const multi = D.sections.length > 1;
   const SN = {}; D.stores.forEach((x) => (SN[x.id] = x));
   const isYesterday = DATE === D.default_date;
@@ -68,7 +69,7 @@ function render() {
       ${DATE === D.today ? '<span class="pill gold">Today</span>' : isYesterday ? '<span class="pill gold">Yesterday</span>' : `<button class="btn small" id="yestBtn">Jump to ${fmtDate(D.default_date, { month: "short", day: "numeric" })}</button>`}
     </div></section>
   ${tabsHtml()}
-  <p class="hint">${isAdmin() ? "<b>Admin:</b> you can enter, correct or delete sales for <b>any store</b> and <b>any day</b> of the contest (use ◀ ▶ or the calendar for past days). " : ""}Type each rep's numbers for <b>${fmtDate(DATE, { weekday: "long", month: "long", day: "numeric" })}</b>, then hit <b>Save day</b>. This shows what's already saved for the day — changing it corrects it.
+  <p class="hint">${isAdmin() ? `<b>Admin:</b> you can enter, correct or delete sales for ${single ? "" : "<b>any store</b> and "}<b>any day</b> of the contest (use ◀ ▶ or the calendar for past days). ` : ""}Type each rep's numbers for <b>${fmtDate(DATE, { weekday: "long", month: "long", day: "numeric" })}</b>, then hit <b>Save day</b>. This shows what's already saved for the day — changing it corrects it.
     New units go in steps of <b>0.5</b> (split deal = 0.5). Add each used deal's front gross; tap <b>½ split</b> for a split deal and enter <b>this rep's half</b>.
     <b>📅 Appointments</b> = appointments the rep set that day (whole numbers). Appointments count <b>${apptWinTxt()}</b> only${inApptWindow(DATE) ? "" : ` — <b class="bad">${fmtDate(DATE, { month: "short", day: "numeric" })} is outside that window, so appointments are locked for this day</b>`}.</p>
   <section class="card grid">
@@ -171,7 +172,7 @@ function refreshDirty() {
     el.textContent = `${units(sn)} new · ${units(su)} used · ${money(sg)} · ${sa} appts`;
   });
   const gt = $("#gtotal");
-  if (gt) gt.innerHTML = `<span>${STORE_ID === "all" ? "All stores day total" : "Store day total"}</span><span>New<b class="num">${units(n)}</b></span><span>Used<b class="num">${units(uu)}</b></span><span>Used gross<b class="num">${money(g)}</b></span><span>Appts<b class="num">${na}</b></span>`;
+  if (gt) gt.innerHTML = `<span>${STORE_ID === "all" && D.stores.length > 1 ? "All stores day total" : "Store day total"}</span><span>New<b class="num">${units(n)}</b></span><span>Used<b class="num">${units(uu)}</b></span><span>Used gross<b class="num">${money(g)}</b></span><span>Appts<b class="num">${na}</b></span>`;
   $("#saveBar").classList.toggle("hidden", !dr.length);
   $("#saveMsg").textContent = `${dr.length} rep${dr.length === 1 ? "" : "s"} changed for ${fmtDate(DATE, { month: "short", day: "numeric" })}`;
 }
@@ -231,7 +232,7 @@ function dealModal(existing, preset) {
     <div style="display:grid;gap:12px">
       <label class="f">Salesperson<select id="mSp">${D.stores.filter((st) => D.people.some((p) => p.store_id === st.id)).map((st) => {
         const opts = D.people.filter((p) => p.store_id === st.id && (p.active || p.id === d.sp_id)).map((p) => `<option value="${p.id}" ${p.id === d.sp_id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
-        return STORE_ID === "all" ? `<optgroup label="${esc(st.name)}">${opts}</optgroup>` : opts; }).join("")}</select></label>
+        return STORE_ID === "all" && D.stores.length > 1 ? `<optgroup label="${esc(st.name)}">${opts}</optgroup>` : opts; }).join("")}</select></label>
       <div class="grid2"><label class="f">Date<input type="date" id="mDate" value="${d.date || DATE}" min="${D.start_date}" max="${maxD}" style="color-scheme:dark"></label>
         <label class="f">Type<select id="mKind"><option value="new" ${d.kind !== "used" && d.kind !== "appt" ? "selected" : ""}>New car units</option><option value="used" ${d.kind === "used" ? "selected" : ""}>Used car deal</option><option value="appt" ${d.kind === "appt" ? "selected" : ""}>Appointments set</option></select></label></div>
       <div class="grid2"><label class="f" id="mUnitsL">Units (0.5 steps)<input id="mUnits" inputmode="decimal" value="${d.units ?? 1}"></label>

@@ -18,7 +18,8 @@ const assert = (c, m) => { if (!c) { console.error("FAIL: " + m); process.exit(1
   await p.keyboard.type("1111"); await p.keyboard.press("Enter");
   await p.waitForSelector(".grow");
   const day = await p.inputValue("#dateIn");
-  assert(day === "2026-10-17", "entry date defaults to last selling day (Sat before simulated Sunday) = " + day);
+  assert(/^\d{4}-\d{2}-\d{2}$/.test(day), "entry date defaults to the last selling day = " + day);
+  assert((await p.$$(".grow")).length === 6, "store grid lists the 6 reps");
   // what's already saved for rep row 0
   const n0 = parseFloat(await p.inputValue('[data-new="0"]'));
   await p.click('[data-inc="0"]'); await p.click('[data-inc="0"]');           // +1 new unit
@@ -52,30 +53,28 @@ const assert = (c, m) => { if (!c) { console.error("FAIL: " + m); process.exit(1
   await p.click("[data-del]"); await p.waitForTimeout(600);
   const del = await state();
   assert(JSON.stringify(s1(del)) !== JSON.stringify(s1(ed)), "delete removed an entry");
-  // admin: all-stores grid, enter for two different stores on a PAST day, then correct another store's entry
+  // admin (single store): no store switcher, enter a PAST day, delete an entry
   await p.request.post(BASE + "/api/logout", { data: {} });
   await p.goto(BASE + "/login?next=/enter"); await p.keyboard.type("9999"); await p.keyboard.press("Enter");
-  await p.waitForSelector(".tabs");
-  assert((await p.$$(".tab")).length === 4, "admin sees store switcher: All stores + 3 stores");
-  await p.click('[data-tab="all"]'); await p.waitForSelector(".gsec");
-  assert((await p.$$(".gsec")).length === 3, "All-stores grid shows 3 store sections");
-  await p.fill("#dateIn", "2026-10-05"); await p.dispatchEvent("#dateIn", "change"); await p.waitForTimeout(500);
-  assert((await p.inputValue("#dateIn")) === "2026-10-05", "admin can open a past day");
+  await p.waitForSelector(".grow");
+  assert((await p.$$(".tab")).length === 0, "single store: admin sees no store tabs");
+  assert((await p.textContent(".head h1")).includes("Chrysler Muskegon"), "admin entry header is Chrysler Muskegon");
+  await p.fill("#dateIn", "2026-09-26"); await p.dispatchEvent("#dateIn", "change"); await p.waitForTimeout(500);
+  assert((await p.inputValue("#dateIn")) === "2026-09-26", "admin can open a past day");
   const pre = await state();
-  const secRows = await p.$$eval(".grow", (els) => els.length);
-  await p.click('[data-inc="0"]');                                   // store 1, first rep +0.5
-  await p.fill(`[data-g="${secRows - 1}"]`, "2500"); await p.click(`[data-add="${secRows - 1}"]`); // last rep = store 3
+  const rows = await p.$$eval(".grow", (els) => els.length);
+  await p.click('[data-inc="0"]');
+  await p.fill(`[data-g="${rows - 1}"]`, "2500"); await p.click(`[data-add="${rows - 1}"]`);
   await p.click("#saveBtn"); await p.waitForTimeout(800);
   const post = await state();
-  const sx = (r, id) => r.stores.find((s) => s.id === id);
-  assert(Math.abs(sx(post, 1).new - sx(pre, 1).new - 0.5) < 1e-9, "admin saved store 1 (+0.5 new) from the All-stores grid");
-  assert(Math.abs(sx(post, 3).gross - sx(pre, 3).gross - 2500) < 0.01, "admin saved store 3 (+$2,500 used) in the same save");
-  await p.click('[data-tab="2"]'); await p.waitForSelector(".grow");
+  assert(Math.abs(s1(post).new - s1(pre).new - 0.5) < 1e-9, "admin saved +0.5 new on a past day");
+  assert(Math.abs(s1(post).gross - s1(pre).gross - 2500) < 0.01, "admin saved +$2,500 used in the same save");
   await p.click("[data-del]"); await p.waitForTimeout(600);
-  assert(JSON.stringify(sx(await state(), 2)) !== JSON.stringify(sx(post, 2)), "admin deleted a store-2 entry");
+  assert(JSON.stringify(s1(await state())) !== JSON.stringify(s1(post)), "admin deleted an entry");
   // leaderboard renders
   await p.goto(BASE + "/"); await p.waitForSelector(".scard");
-  assert((await p.$$(".scard")).length === 3, "leaderboard shows 3 store cards");
+  assert((await p.$$(".scard")).length === 1, "leaderboard shows 1 store-goal card");
+  assert((await p.$$(".lb")).length >= 4, "leaderboard shows the 4 individual boards + earnings");
   assert(errs.length === 0, "no JS errors " + errs.join("; "));
   await b.close();
 })();

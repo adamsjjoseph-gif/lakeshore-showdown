@@ -23,21 +23,20 @@ COOKIE = "spiff_session"
 
 DEFAULT_SETTINGS = {
     "contest_name": "Lakeshore Showdown",
-    "tagline": "3 stores · 5 days · $10,500 on the line",
+    "tagline": "6 closers · 5 days · $3,000 on the line",
     "start_date": "2026-09-26",
     "end_date": "2026-09-30",
     "appt_start": calc.DEFAULT_APPT_WINDOW[0],   # appointments only count on these dates (inclusive)
     "appt_end": calc.DEFAULT_APPT_WINDOW[1],
     "timezone": os.environ.get("TZ_NAME", "America/Detroit"),
     "closed_sundays": True,
-    "weight_new": 1,          # store battle: relative weights of new units / used gross / appointments vs target
+    "weight_new": 1,          # store goal: relative weights of new units / used gross / appointments vs target
     "weight_used": 1,         # (1 / 1 / 1 = equal thirds)
     "weight_appt": 1,
     "points_new": 2,
     "points_per_1k": 1,
     "points_per_appt": 0.5,   # Showdown Points per appointment (inside the appointment window)
     "heavy_hitter": 4000,
-    "qualifier_units": 1,
     "hat_trick_units": 3,
     "streak_days": 3,
     "bounty_days": 1,         # Daily Hot Shot period length (1 = every day)
@@ -48,12 +47,13 @@ DEFAULT_SETTINGS = {
 
 DEFAULT_STORES = [
     # name, short, color, new target (units), used gross target ($), contribution ($), appointment target (window)
-    ("Chrysler Muskegon", "CJDR Muskegon", "#e11d48", 70, 140000, 3500, 60),
-    ("Chrysler Grand Haven", "CJDR Grand Haven", "#f59e0b", 55, 110000, 3500, 48),
-    ("Grand Haven Ford", "GH Ford", "#2563eb", 65, 130000, 3500, 56),
+    ("Chrysler Muskegon", "CJDR Muskegon", "#e11d48", 70, 140000, 3000, 60),
 ]
-SCHEMA_VERSION = 2
-DEFAULT_PINS = {"admin": "9999", "stores": ["1111", "2222", "3333"], "view": ""}
+STORE_NAME = DEFAULT_STORES[0][0]
+DEFAULT_ROSTER = ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem"]
+OLD_TAGLINES = ("3 stores · 1 month · $10,500 on the line", "3 stores · 5 days · $10,500 on the line")
+SCHEMA_VERSION = 3
+DEFAULT_PINS = {"admin": "9999", "stores": ["1111"], "view": ""}
 
 # --------------------------------------------------------------------------------------------- db
 class DB:
@@ -218,16 +218,20 @@ def migrate_schema():
 
 
 def migrate_settings(first_run):
-    """One-time move of an existing Oct 1-31 database to the Sep 26-30 five-day format with appointments."""
+    """One-time upgrades of an existing database:
+    v1 -> v2: Oct 1-31 month -> Sep 26-30 five-day format with appointments.
+    v2 -> v3: 3 stores / $10,500 -> Chrysler Muskegon only / $3,000 with the real roster."""
     ver = get_settings().get("schema_version") or 1
     if ver >= SCHEMA_VERSION:
         return
-    if not first_run:
+    if not first_run and ver < 3:
+        migrate_single_store()
+    if not first_run and ver < 2:
         cur = get_settings()
         new = {k: DEFAULT_SETTINGS[k] for k in ("start_date", "end_date", "appt_start", "appt_end", "weight_new",
                                                   "weight_used", "weight_appt", "points_per_appt", "bounty_days")}
         new["prizes"] = dict(calc.DEFAULT_PRIZES)
-        if cur.get("tagline") == "3 stores · 1 month · $10,500 on the line":
+        if cur.get("tagline") in OLD_TAGLINES:
             new["tagline"] = DEFAULT_SETTINGS["tagline"]
         for k, v in new.items():
             set_setting(k, v)
@@ -237,6 +241,54 @@ def migrate_settings(first_run):
         audit("system", "migrate", "5-day format: dates %s to %s, appointments %s to %s, new prize table, appointment targets"
               % (new["start_date"], new["end_date"], new["appt_start"], new["appt_end"]))
     set_setting("schema_version", SCHEMA_VERSION)
+
+
+def migrate_single_store():
+    """v3: keep only Chrysler Muskegon (its entries, PIN and targets are kept), set the $3,000 pool and prize table,
+    and put the real roster (Monty, Nathan, Adrian, Sierra, Jacob, Raheem) in place of placeholder reps."""
+    stores = db.q("SELECT id, name FROM stores ORDER BY sort,id")
+    if not stores:
+        return
+    keep = next((x for x in stores if x["name"] == STORE_NAME), stores[0])
+    removed = []
+    with db.tx():
+        c = db.conn
+        for x in stores:
+            if x["id"] == keep["id"]:
+                continue
+            n = c.execute("SELECT COUNT(*) FROM deals WHERE store_id=?", (x["id"],)).fetchone()[0]
+            c.execute("DELETE FROM deals WHERE store_id=?", (x["id"],))
+            c.execute("DELETE FROM deals WHERE sp_id IN (SELECT id FROM salespeople WHERE store_id=?)", (x["id"],))
+            c.execute("DELETE FROM salespeople WHERE store_id=?", (x["id"],))
+            c.execute("DELETE FROM stores WHERE id=?", (x["id"],))
+            removed.append(f"{x['name']} ({n} entries)")
+        c.execute("UPDATE stores SET name=?, contribution=?, sort=0 WHERE id=?", (STORE_NAME, DEFAULT_STORES[0][5], keep["id"]))
+        # roster: fill in missing real names by renaming placeholder reps first, then adding; drop leftover placeholders
+        people = [dict(r) for r in c.execute("SELECT id, name, placeholder FROM salespeople WHERE store_id=? ORDER BY sort,id",
+                                            (keep["id"],)).fetchall()]
+        have = {p["name"].strip().lower() for p in people if not p["placeholder"]}
+        missing = [n for n in DEFAULT_ROSTER if n.lower() not in have]
+        has_deals = lambda pid: c.execute("SELECT COUNT(*) FROM deals WHERE sp_id=?", (pid,)).fetchone()[0] > 0
+        # only placeholders with NO entries get renamed (an entry on "Salesperson 3" belongs to an unknown person)
+        placeholders = [p for p in people if p["placeholder"] and not has_deals(p["id"])]
+        with_deals = [p for p in people if p["placeholder"] and has_deals(p["id"])]
+        for p, name in zip(placeholders, missing):
+            c.execute("UPDATE salespeople SET name=?, placeholder=0, active=1 WHERE id=?", (name, p["id"]))
+        for name in missing[len(placeholders):]:
+            c.execute("INSERT INTO salespeople(store_id,name,placeholder,sort) VALUES(?,?,0,?)", (keep["id"], name, 100))
+        for p in placeholders[len(missing):]:
+            c.execute("DELETE FROM salespeople WHERE id=?", (p["id"],))
+        for p in with_deals:     # keep their entries (they count for the store goal) but drop them from individual prizes
+            c.execute("UPDATE salespeople SET active=0 WHERE id=?", (p["id"],))
+        order = {n.lower(): i for i, n in enumerate(DEFAULT_ROSTER, start=1)}
+        for r in c.execute("SELECT id, name FROM salespeople WHERE store_id=?", (keep["id"],)).fetchall():
+            c.execute("UPDATE salespeople SET sort=? WHERE id=?", (order.get(r[1].strip().lower(), 50 + r[0]), r[0]))
+    set_setting("prizes", dict(calc.DEFAULT_PRIZES))
+    if get_settings().get("tagline") in OLD_TAGLINES:
+        set_setting("tagline", DEFAULT_SETTINGS["tagline"])
+    db.x("DELETE FROM settings WHERE key='qualifier_units'")
+    audit("system", "migrate", f"single store: kept {STORE_NAME}; removed " + (", ".join(removed) or "nothing")
+          + f"; pool ${DEFAULT_STORES[0][5]:,}; new prize table; roster " + ", ".join(DEFAULT_ROSTER))
 
 
 def init_db():
@@ -250,14 +302,13 @@ def init_db():
         for i, (name, short, color, nt, ut, contrib, at) in enumerate(DEFAULT_STORES):
             sid = db.x("INSERT INTO stores(name,short,color,new_target,used_target,contribution,sort,appt_target) "
                        "VALUES(?,?,?,?,?,?,?,?)", (name, short, color, nt, ut, contrib, i, at))
-            for n in range(1, 8):
-                db.x("INSERT INTO salespeople(store_id,name,placeholder,sort) VALUES(?,?,1,?)",
-                     (sid, f"Salesperson {n}", n))
+            for n, rep_name in enumerate(DEFAULT_ROSTER, start=1):
+                db.x("INSERT INTO salespeople(store_id,name,placeholder,sort) VALUES(?,?,0,?)", (sid, rep_name, n))
         if not db.one("SELECT 1 FROM settings WHERE key='admin_pin_hash'"):
             set_setting("admin_pin_hash", hash_pin(DEFAULT_PINS["admin"]))
             for s, pin in zip(db.q("SELECT id FROM stores ORDER BY sort,id"), DEFAULT_PINS["stores"]):
                 db.x("UPDATE stores SET pin_hash=? WHERE id=?", (hash_pin(pin), s["id"]))
-        audit("system", "first-run", "seeded stores, placeholder rosters and demo PINs")
+        audit("system", "first-run", "seeded store, roster and demo PINs")
         # never put fake demo sales on a board whose contest has already started
         if os.environ.get("SEED_DEMO", "1") != "0" and today_local() < calc.to_date(get_settings()["start_date"]):
             load_demo("system")
@@ -396,7 +447,7 @@ def contest_state():
 
 def public_settings(s):
     keys = ["contest_name", "tagline", "start_date", "end_date", "closed_sundays", "weight_new", "weight_used",
-            "weight_appt", "points_new", "points_per_1k", "points_per_appt", "heavy_hitter", "qualifier_units",
+            "weight_appt", "points_new", "points_per_1k", "points_per_appt", "heavy_hitter",
             "hat_trick_units", "streak_days", "bounty_days", "prizes", "demo_today", "view_pin_required", "timezone",
             "appt_start", "appt_end"]
     out = {k: s.get(k) for k in keys}
@@ -831,19 +882,19 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, "Appointment window: last day must be on or after the first day")
         for k, lo, hi in (("weight_new", 0, 100), ("weight_used", 0, 100), ("weight_appt", 0, 100),
                           ("points_new", 0, 100), ("points_per_1k", 0, 100), ("points_per_appt", 0, 100),
-                          ("heavy_hitter", 0, 100000), ("qualifier_units", 0, 50), ("hat_trick_units", 0.5, 50),
+                          ("heavy_hitter", 0, 100000), ("hat_trick_units", 0.5, 50),
                           ("streak_days", 2, 60), ("bounty_days", 1, 366)):
             if k in b:
                 out[k] = num(b[k], k, lo, hi)
         if "prizes" in b:
             p = b["prizes"]
             pr = {}
-            for k in ("team", "new", "used", "appt"):
+            for k in ("points", "new", "used", "appt"):
                 arr = p.get(k, cur["prizes"][k])
                 if not isinstance(arr, list) or len(arr) > 10:
                     raise ApiError(400, f"prizes.{k} must be a list")
                 pr[k] = [num(x, f"{k} prize", 0, 100000) for x in arr]
-            for k in ("mvp", "hot_shot"):
+            for k in ("hot_shot",):
                 pr[k] = num(p.get(k, cur["prizes"][k]), f"{k} prize", 0, 100000)
             out["prizes"] = pr
         wts = [out.get(k, cur.get(k)) for k in ("weight_new", "weight_used", "weight_appt")]
@@ -981,12 +1032,11 @@ class Handler(BaseHTTPRequestHandler):
                               r["gross"] if r["kind"] == "used" else "", r["note"], r["entered_by"], r["created_at"],
                               r["updated_at"] or "", r["demo"]] for r in rows])
         elif what == "standings":
-            text = csv_text(["rank", "store", "new_units", "new_target", "new_pct", "used_units", "used_gross",
-                             "used_target", "used_pct", "appointments", "appt_target", "appt_pct", "store_score",
-                             "projected_team_prize"],
-                            [[x["rank"], x["name"], x["new"], x["new_target"], x["new_pct"], x["used_units"], x["gross"],
-                              x["used_target"], x["used_pct"], x["appts"], x["appt_target"], x["appt_pct"], x["score"],
-                              x["team_prize"]] for x in res["stores"]])
+            text = csv_text(["store", "new_units", "new_target", "new_pct", "used_units", "used_gross",
+                             "used_target", "used_pct", "appointments", "appt_target", "appt_pct", "goal_score"],
+                            [[x["name"], x["new"], x["new_target"], x["new_pct"], x["used_units"], x["gross"],
+                              x["used_target"], x["used_pct"], x["appts"], x["appt_target"], x["appt_pct"], x["score"]]
+                             for x in res["stores"]])
         elif what == "individuals":
             text = csv_text(["salesperson", "store", "new_units", "used_units", "used_gross", "appointments", "showdown_points",
                              "best_used_deal", "badges", "projected_payout"],

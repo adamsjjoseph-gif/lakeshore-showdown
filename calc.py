@@ -7,16 +7,18 @@ All money is handled in integer CENTS internally so payouts always add up exactl
 from collections import defaultdict
 from datetime import date, timedelta
 
+# Single store (Chrysler Muskegon), $3,000 pool. The old 3-store $10,500 table scaled by 2/7 and rounded to $25s;
+# the store-vs-store prizes (Store Battle team pots + Store MVP) became the individual Showdown Champion prize.
 DEFAULT_PRIZES = {
-    "team": [2500, 1000, 0],      # Store Battle: 1st / 2nd / 3rd place store (split among qualified reps)
-    "new": [2000, 0, 0],          # New Unit King: top individual (all stores)
-    "used": [2000, 0, 0],         # Used Gross Boss: top individual (all stores)
-    "appt": [1500, 0, 0],         # Appointment Ace: top individual, appointments inside the appointment window
-    "mvp": 250,                   # Store MVP: top Showdown Points at EACH store
-    "hot_shot": 150,              # Daily Hot Shot: most Showdown Points that day (one prize per bounty period, default 1 day)
+    "points": [900, 275, 0],      # Showdown Champion: most Showdown Points for the whole contest (1st / 2nd / 3rd)
+    "new": [575, 0, 0],           # New Unit King: top individual
+    "used": [575, 0, 0],          # Used Gross Boss: top individual
+    "appt": [425, 0, 0],          # Appointment Ace: top individual, appointments inside the appointment window
+    "hot_shot": 50,               # Daily Hot Shot: most Showdown Points that day (one prize per bounty period, default 1 day)
 }
-POOL_TOTAL = 10500                # 3 stores x $3,500
-LEGACY_PRIZE_KEYS = ("top_gun", "big_fish")   # weekly bounties used before the 5-day format (ignored now)
+POOL_TOTAL = 3000                 # Chrysler Muskegon, $3,000
+# prize keys from older versions (weekly bounties; 3-store Store Battle team pots and Store MVP) -- ignored now
+LEGACY_PRIZE_KEYS = ("top_gun", "big_fish", "team", "mvp")
 DEFAULT_APPT_WINDOW = ("2026-09-26", "2026-09-29")
 
 BADGES = {
@@ -94,15 +96,14 @@ def contest_periods(start, end, days=7):
     return out
 
 
-def prize_budget(prizes, n_stores, n_periods):
+def prize_budget(prizes, n_periods):
     """Total CENTS the prize settings will pay out (must equal the pool)."""
     p = {**DEFAULT_PRIZES, **(prizes or {})}
     parts = {
-        "team": sum(c(x) for x in p["team"]),
+        "points": sum(c(x) for x in p["points"]),
         "new": sum(c(x) for x in p["new"]),
         "used": sum(c(x) for x in p["used"]),
         "appt": sum(c(x) for x in p["appt"]),
-        "mvp": c(p["mvp"]) * n_stores,
         "hot_shot": c(p["hot_shot"]) * n_periods,
     }
     parts["total"] = sum(parts.values())
@@ -110,7 +111,7 @@ def prize_budget(prizes, n_stores, n_periods):
 
 
 def score_weights(cfg):
-    """Store-battle weights for (new units, used gross, appointments), normalised to add up to 1.
+    """Store-goal score weights for (new units, used gross, appointments), normalised to add up to 1.
     Settings hold relative weights (default 1/1/1 = equal thirds). Older databases only had weight_new (a % with
     used = 100 - new); for those, appointments get the average of the other two, which is equal thirds for 50/50."""
     if cfg.get("weight_used") is None:           # legacy: weight_new is a %, used = 100 - new
@@ -144,7 +145,7 @@ def _place_label(places):
 def compute(cfg, stores, people, deals, today):
     """
     cfg: settings dict (start_date, end_date, prizes, weight_new, points_new, points_per_1k,
-         heavy_hitter, qualifier_units, closed_sundays)
+         heavy_hitter, closed_sundays)
     stores: [{id, name, short, color, new_target, used_target, contribution}]
     people: [{id, store_id, name, active}]
     deals:  [{id, store_id, sp_id, date, kind ('new'|'used'), units, gross}]
@@ -158,7 +159,6 @@ def compute(cfg, stores, people, deals, today):
     pts_k = float(cfg.get("points_per_1k", 1))
     pts_appt = float(cfg.get("points_per_appt", 0.5) or 0)
     heavy_c = c(cfg.get("heavy_hitter", 4000))
-    qual_units = float(cfg.get("qualifier_units", 1))
     closed_sun = bool(cfg.get("closed_sundays", True))
     hat_units = float(cfg.get("hat_trick_units", 3) or 3)
     streak_need = int(cfg.get("streak_days", 3) or 3)
@@ -257,18 +257,6 @@ def compute(cfg, stores, people, deals, today):
             rollover += unc
             unclaimed_notes.append({"cat": cat, "cents": unc})
 
-    # ---- store MVPs ----
-    for sid in store_ids:
-        elig = [s for s in active if s["store_id"] == sid and s["points"] > 0]
-        groups = tie_groups(elig, lambda s: (s["points"], s["new"]))
-        mvp_c = c(P["mvp"])
-        if groups:
-            for s, sh in zip(groups[0], split_cents(mvp_c, len(groups[0]))):
-                emit("mvp", "Store MVP" + (" (tie)" if len(groups[0]) > 1 else ""), s["id"], sid, sh, indiv_status)
-        elif mvp_c:
-            rollover += mvp_c
-            unclaimed_notes.append({"cat": "mvp", "cents": mvp_c, "store_id": sid})
-
     # ---- Daily Hot Shot (one prize per bounty period; default period = 1 day) ----
     # Winner = most Showdown Points earned in that period (new units + used gross + appointments in the window).
     # Tie-break: more new units that day, then more used gross, then the tied reps split the prize.
@@ -310,7 +298,7 @@ def compute(cfg, stores, people, deals, today):
             rollover += hs_c
             unclaimed_notes.append({"cat": "hot_shot", "cents": hs_c, "period": per["n"]})
 
-    # ---- store battle ----
+    # ---- store goal (progress vs. the store's own targets; one store, no store-vs-store ranking) ----
     st = {}
     for s in stores:
         mem = [p for p in ps.values() if p["store_id"] == s["id"]]
@@ -330,45 +318,31 @@ def compute(cfg, stores, people, deals, today):
                        "new": new, "used_units": uu, "gross": g / 100, "new_target": nt, "used_target": ut,
                        "new_pct": round(new_pct * 100, 2), "used_pct": round(used_pct * 100, 2), "score": round(score, 2),
                        "appts": ap, "appt_target": at, "appt_pct": round(appt_pct * 100, 2), "appts_per_rep": round(ap / hc, 2),
-                       "_score": score, "_new_pct": new_pct, "headcount": len(act),
-                       "new_per_rep": round(new / hc, 2), "gross_per_rep": round(g / 100 / hc, 2),
-                       "qualifiers": [p["id"] for p in act if p["new"] + p["used_units"] >= qual_units]}
+                       "headcount": len(act), "new_per_rep": round(new / hc, 2), "gross_per_rep": round(g / 100 / hc, 2)}
+
+    # ---- Showdown Champion (individual; replaces the old store-vs-store prizes) ----
+    # Most Showdown Points for the whole contest. Tie-break: more new units, then more used gross, then split.
+    # Unclaimed prizes from the other categories (e.g. closed-Sunday Hot Shot) roll into 1st place here.
     if not projecting:
         rollover, unclaimed_notes = 0, []
-    team_prizes = [c(x) for x in P["team"]] if projecting else []
-    if team_prizes:
-        team_prizes[0] += rollover
-    sgroups = tie_groups(list(st.values()), lambda s: (round(s["_score"], 9), round(s["_new_pct"], 9)))
-    rank = 1
-    for g in sgroups:
-        for s in g:
-            s["rank"] = rank
-        rank += len(g)
-    s_awards, s_lines, s_unc = award_places([[s["id"] for s in g] for g in sgroups], team_prizes)
-    team_status = "final" if status == "ended" else "projected"
-    # a store with no qualified reps can't use its team pot -> it moves to the best-ranked store that has qualifiers
-    ranked_ids = [x["id"] for g in sgroups for x in g]
-    receivers = [sid for sid in ranked_ids if st[sid]["qualifiers"]]
-    orphan = sum(v for sid, v in s_awards.items() if v and not st[sid]["qualifiers"])
-    if orphan and receivers:
-        for sid in list(s_awards):
-            if not st[sid]["qualifiers"]:
-                s_awards[sid] = 0
-        s_awards[receivers[0]] = s_awards.get(receivers[0], 0) + orphan
-    for sid, s in st.items():
-        pot = s_awards.get(sid, 0)
-        s["team_prize"] = pot / 100
-        q = sorted(s["qualifiers"], key=lambda pid: (-ps[pid]["points"], ps[pid]["name"]))
-        s["per_rep_share"] = (pot / len(q) / 100) if q else 0
-        if pot and q:
-            for pid, sh in zip(q, split_cents(pot, len(q))):
-                emit("team", f"Store Battle {_place_label([s['rank']])} ({s['short']})", pid, sid, sh, team_status)
-        elif pot:
-            emit("team", f"Store Battle — no qualified reps at {s['short']}", None, sid, pot, "unclaimed")
+    champ_prizes = [c(x) for x in P["points"]] if projecting else []
+    if champ_prizes:
+        champ_prizes[0] += rollover
+    elig = [s for s in active if s["points"] > 0]
+    groups = [[x["id"] for x in g] for g in tie_groups(elig, lambda s: (round(s["points"], 6), s["new"], s["gross_c"]))]
+    awards, lines, champ_unc = award_places(groups, champ_prizes)
+    if champ_unc and lines:
+        # fewer point-earners than paid places: the leftover place money goes to 1st, so nothing goes unpaid
+        lines[0]["shares"] = [a + b for a, b in zip(lines[0]["shares"], split_cents(champ_unc, len(lines[0]["ids"])))]
+        champ_unc = 0
+    for ln in lines:
+        for pid, sh in zip(ln["ids"], ln["shares"]):
+            if sh:
+                emit("points", "Showdown Champion " + _place_label(ln["places"]), pid, ps[pid]["store_id"], sh, indiv_status)
 
     # ---- totals ----
     pool_c = sum(c(s.get("contribution") or 0) for s in stores)
-    budget = prize_budget(P, len(stores), len(periods))
+    budget = prize_budget(P, len(periods))
     upcoming_c = sum(hs_c for per in periods if per["status"] == "upcoming")
     assigned_c = sum(l["cents"] for l in payout_lines)
     by_person = defaultdict(int)
@@ -390,7 +364,7 @@ def compute(cfg, stores, people, deals, today):
 
     lb_new = [person_row(s, {"rank": r}) for r, s in ranked(active, new_key)]
     lb_used = [person_row(s, {"rank": r}) for r, s in ranked(active, used_key)]
-    lb_points = [person_row(s, {"rank": r}) for r, s in ranked(active, lambda s: (s["points"], s["new"]))]
+    lb_points = [person_row(s, {"rank": r}) for r, s in ranked(active, lambda s: (round(s["points"], 6), s["new"], s["gross_c"]))]
     lb_appt = [person_row(s, {"rank": r}) for r, s in ranked(active, appt_key)]
 
     # ---- trend: cumulative store score by day ----
@@ -463,9 +437,6 @@ def compute(cfg, stores, people, deals, today):
         hot = sorted([s for s in active if s["streak"] >= streak_need], key=lambda s: -s["streak"])
         highlights["hot"] = [{"person_id": s["id"], "streak": s["streak"]} for s in hot[:5]]
 
-    for s in st.values():
-        s.pop("_score"), s.pop("_new_pct")
-
     per_out = []
     for per in periods:
         per_out.append({"n": per["n"], "start": per["start"].isoformat(), "end": per["end"].isoformat(),
@@ -474,7 +445,7 @@ def compute(cfg, stores, people, deals, today):
     return {
         "status": status, "today": today.isoformat(), "total_days": total_days, "elapsed_days": elapsed,
         "days_left": days_left, "pace_pct": round(pace * 100, 2),
-        "stores": sorted(st.values(), key=lambda s: s["rank"]),
+        "stores": list(st.values()),
         "leaderboards": {"new": lb_new, "used": lb_used, "points": lb_points, "appt": lb_appt},
         "periods": per_out,
         "payouts": {
@@ -483,7 +454,7 @@ def compute(cfg, stores, people, deals, today):
             "pool": pool_c / 100, "budget": {k: v / 100 for k, v in budget.items()},
             "budget_ok": budget["total"] == pool_c,
             "assigned": assigned_c / 100, "upcoming": upcoming_c / 100, "open_live": live_open_c / 100,
-            "rollover": rollover / 100, "unclaimed": unclaimed_notes,
+            "rollover": rollover / 100, "unclaimed": unclaimed_notes, "champ_unclaimed": champ_unc / 100,
             "unassigned_check": (pool_c - assigned_c - upcoming_c - live_open_c) / 100,
             "up_for_grabs": (pool_c - assigned_c) / 100, "projecting": projecting,
         },
