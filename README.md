@@ -1,7 +1,7 @@
 # ⚡ Lakeshore Showdown: Sales Contest (Spiff) Website
 
 A live leaderboard and daily sales entry site for a single-store dealership contest:
-**Chrysler Muskegon** (Monty, Nathan, Adrian, Sierra, Jacob, Raheem, Justin), **$3,000 prize pool**, **Sat Sep 26 – Wed Sep 30, 2026** (ends 11:59:59 PM ET). Three categories: new units, used front gross, and **appointments** (appointments count Sat 9/26 – Tue 9/29).
+**Chrysler Muskegon** (Monty, Nathan, Adrian, Sierra, Caleb, Raheem, Justin), **$3,000 prize pool**, **Sat Sep 26 – Wed Sep 30, 2026** (ends 11:59:59 PM ET). Three categories: new units, used front gross, and **appointments** (appointments count Sat 9/26 – Tue 9/29).
 
 - **Public leaderboard** (`/`): live countdown to the end, store goal (progress vs. targets), individual rankings (Showdown Champion, New Unit King, Used Gross Boss, Appointment Ace), Daily Hot Shot, projected payouts, trend charts. Works on phones and refreshes every minute.
 - **Enter Sales** (`/enter`): the store manager (or admin) enters the day's numbers (new units, appointments, used deals) for the whole team on one screen. Defaults to yesterday. Includes edit, delete and copy.
@@ -46,13 +46,14 @@ On the first run it creates `data/spiff.db` with Chrysler Muskegon, the seven-pe
 
 An existing database from an earlier version is migrated automatically on start:
 - Oct 1–31 version → 5-day format (deals table rebuilt to allow appointment rows, `appt_target` column added, dates/prizes moved once).
-- 3-store version (schema v2) → single store (schema v3): Chrysler Grand Haven and Grand Haven Ford are deleted with their reps and entries; Chrysler Muskegon keeps its entries, PIN and targets; contribution becomes $3,000; the prize table becomes the $3,000 table; placeholder reps with no entries are renamed to Monty, Nathan, Adrian, Sierra, Jacob, Raheem, Justin (placeholders that have entries are kept inactive so the entries still count). Runs once; logged in the Activity log.
+- 3-store version (schema v2) → single store (schema v3): Chrysler Grand Haven and Grand Haven Ford are deleted with their reps and entries; Chrysler Muskegon keeps its entries, PIN and targets; contribution becomes $3,000; the prize table becomes the $3,000 table; placeholder reps with no entries are renamed to Monty, Nathan, Adrian, Sierra, Caleb, Raheem, Justin (placeholders that have entries are kept inactive so the entries still count). Runs once; logged in the Activity log.
 - Single store v3 → v4: **Justin** is added to Chrysler Muskegon's roster (insert only: existing reps, entries, PINs, targets and prizes are untouched; if a Justin already exists he's just made active, never duplicated). The tagline moves to "7 closers" only if it still reads the old default. Runs once; logged in the Activity log.
+- v4 → v5: rep **Jacob is renamed to Caleb** on the same row (same id, so every entry carries over). Only a rep still named exactly Jacob is renamed; if the name was already changed or a Caleb already exists, nothing is touched. Runs once; logged in the Activity log.
 
 Run the tests:
 
 ```bash
-python3 -m unittest discover tests -v        # 38 tests: payout math ($3,000 total), Showdown Champion, appointments, Hot Shot, tie-breaks, splits, unwinds, API, PINs, CSV, reset, DB migrations
+python3 -m unittest discover tests -v        # 43 tests: payout math ($3,000 total), Showdown Champion, appointments, Hot Shot, tie-breaks, splits, unwinds, API, PINs, CSV, reset, DB migrations
 ```
 
 Optional browser checks (need Node + `npm i playwright-core` + Chrome):
@@ -132,7 +133,7 @@ For HTTPS, put Caddy in front: `caddy reverse-proxy --from showdown.yourdomain.c
 ### Launch checklist (do this before kickoff)
 
 1. Open `/admin` and log in with the admin PIN.
-2. **Roster:** confirm Monty, Nathan, Adrian, Sierra, Jacob, Raheem, Justin; add or remove people.
+2. **Roster:** confirm Monty, Nathan, Adrian, Sierra, Caleb, Raheem, Justin; add or remove people.
 3. **Store:** set Chrysler Muskegon's **new-unit target**, **used-gross target** and **appointment target** — sized for the contest length (5 days; appointments 4 days). Check the $3,000 contribution.
 4. **Contest & Prizes:** confirm the dates and prizes. The green bar must say **Prizes $3,000 = Pool $3,000**. If you change the contest length, the number of Daily Hot Shot days changes too, so adjust the Hot Shot amount until the bar turns green.
 5. **PINs:** confirm the manager PIN, and decide whether the leaderboard is open or needs a view PIN.

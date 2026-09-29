@@ -128,7 +128,7 @@ class SingleStoreMigrationTest(unittest.TestCase):
             self.assertTrue(adm["budget_ok"])
             self.assertEqual(adm["settings"]["tagline"], "7 closers · 5 days · $3,000 on the line")
             active = [p["name"] for p in adm["people"] if p["active"]]
-            self.assertEqual(active, ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin"])
+            self.assertEqual(active, ["Monty", "Nathan", "Adrian", "Sierra", "Caleb", "Raheem", "Justin"])
             # placeholder #7 had a real entry: kept (inactive) so the entry still counts for the store goal
             p7 = next(p for p in adm["people"] if p["id"] == 7)
             self.assertEqual((p7["active"], p7["deal_rows"]), (0, 1))
@@ -142,7 +142,7 @@ class SingleStoreMigrationTest(unittest.TestCase):
             proc.wait(5)
         # restarting doesn't migrate again
         con = sqlite3.connect(path)
-        self.assertEqual(json.loads(con.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()[0]), 4)
+        self.assertEqual(json.loads(con.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()[0]), 5)
         self.assertEqual(con.execute("SELECT COUNT(*) FROM stores").fetchone()[0], 1)
         con.close()
 
@@ -150,19 +150,19 @@ class SingleStoreMigrationTest(unittest.TestCase):
 class AddJustinMigrationTest(unittest.TestCase):
     """The live v3 database (Muskegon only, 6 reps, real entries) -> v4: Justin is appended; nothing else changes."""
 
-    def make_v3(self, extra_people=()):
+    def make_v3(self, extra_people=(), version=3, names=("Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem")):
         tmp = tempfile.mkdtemp()
         path = os.path.join(tmp, "v3.db")
         con = sqlite3.connect(path)
         con.executescript(V2_SCHEMA)
         con.execute("INSERT INTO stores(name,short,color,new_target,used_target,contribution,sort,appt_target) "
                     "VALUES('Chrysler Muskegon','CJDR Muskegon','#e11d48',70,140000,3000,0,60)")
-        for k, n in enumerate(["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem"], start=1):
+        for k, n in enumerate(names, start=1):
             con.execute("INSERT INTO salespeople(store_id,name,placeholder,sort) VALUES(1,?,0,?)", (n, k))
         for n, active in extra_people:
             con.execute("INSERT INTO salespeople(store_id,name,active,placeholder,sort) VALUES(1,?,?,0,99)", (n, active))
         prizes = {"points": [900, 275, 0], "new": [575, 0, 0], "used": [575, 0, 0], "appt": [425, 0, 0], "hot_shot": 50}
-        for k, v in {"schema_version": 3, "prizes": prizes}.items():
+        for k, v in {"schema_version": version, "prizes": prizes}.items():
             con.execute("INSERT INTO settings VALUES(?,?)", (k, json.dumps(v)))
         con.execute("INSERT INTO deals(store_id,sp_id,date,kind,units,gross,entered_by) VALUES(1,6,'2026-09-26','used',1,4419,'admin')")
         con.execute("INSERT INTO deals(store_id,sp_id,date,kind,units,gross,entered_by) VALUES(1,3,'2026-09-28','used',1,4318,'admin')")
@@ -201,7 +201,7 @@ class AddJustinMigrationTest(unittest.TestCase):
                 self.assertEqual(a.login("8642")[0], 200)
                 _, adm = a.req("GET", "/api/admin")
                 self.assertEqual([p["name"] for p in adm["people"] if p["active"]],
-                                 ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin"])
+                                 ["Monty", "Nathan", "Adrian", "Sierra", "Caleb", "Raheem", "Justin"])
                 self.assertEqual(adm["settings"]["tagline"], "7 closers · 5 days · $3,000 on the line")
                 self.assertEqual(adm["pool"], 3000)
                 self.assertTrue(adm["budget_ok"])
@@ -217,7 +217,8 @@ class AddJustinMigrationTest(unittest.TestCase):
         deals1, people1, stores1 = self.snapshot(path)
         self.assertEqual(deals1, deals0)                      # every entry byte-for-byte unchanged
         self.assertEqual(stores1, stores0)                    # PIN hash / targets / contribution unchanged
-        self.assertEqual(people1[:6], people0)                # existing reps unchanged
+        self.assertEqual(people1[:4] + people1[5:6], people0[:4] + people0[5:6])   # other existing reps unchanged
+        self.assertEqual(people1[4], people0[4][:2] + ("Caleb",) + people0[4][3:])   # v5: Jacob renamed in place
         self.assertEqual(people1[6][1:], (1, "Justin", 1, 0, 7))
         self.assertEqual(len(people1), 7)
 
@@ -238,6 +239,76 @@ class AddJustinMigrationTest(unittest.TestCase):
         finally:
             proc.terminate()
             proc.wait(5)
+
+
+class RenameJacobMigrationTest(AddJustinMigrationTest):
+    """The live v4 database (7 reps incl. Jacob) -> v5: Jacob becomes Caleb on the same row; nothing else changes."""
+    V4 = ("Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin")
+
+    # reuse the parent helpers (make_v3/start/snapshot) but not its tests, which already run in the parent class
+    def test_v3_database_gets_justin_and_keeps_everything(self):
+        pass
+
+    def test_existing_justin_is_not_duplicated_and_custom_tagline_kept(self):
+        pass
+
+    def test_v4_jacob_renamed_to_caleb_in_place(self):
+        path = self.make_v3(version=4, names=self.V4)
+        con = sqlite3.connect(path)       # give Jacob (id 5) an entry: it must carry over to Caleb
+        con.execute("INSERT INTO deals(store_id,sp_id,date,kind,units,gross,entered_by) VALUES(1,5,'2026-09-27','new',2,0,'admin')")
+        con.commit()
+        con.close()
+        deals0, people0, stores0 = self.snapshot(path)
+        for _ in range(2):          # second start must not rename again or log again
+            proc, base = self.start(path)
+            try:
+                a = Client(base)
+                self.assertEqual(a.login("8642")[0], 200)
+                _, adm = a.req("GET", "/api/admin")
+                self.assertEqual([(p["id"], p["name"]) for p in adm["people"] if p["active"]],
+                                 list(enumerate(["Monty", "Nathan", "Adrian", "Sierra", "Caleb", "Raheem", "Justin"], start=1)))
+                self.assertEqual(adm["settings"]["tagline"], "7 closers · 5 days · $3,000 on the line")
+                self.assertEqual(adm["pool"], 3000)
+                self.assertEqual(adm["deal_count"], 3)
+                self.assertEqual(sum("renamed Jacob -> Caleb" in x["detail"] for x in adm["audit"] if x["action"] == "migrate"), 1)
+                self.assertFalse(any("added Justin" in x["detail"] for x in adm["audit"]))   # v4 step not re-run
+                _, st = Client(base).req("GET", "/api/state")
+                caleb = next(x for x in st["result"]["leaderboards"]["new"] if x["name"] == "Caleb")
+                self.assertEqual(caleb["new"], 2)                                            # his entry carried over
+                self.assertNotIn("Jacob", [x["name"] for x in st["people"]])
+            finally:
+                proc.terminate()
+                proc.wait(5)
+        deals1, people1, stores1 = self.snapshot(path)
+        self.assertEqual(deals1, deals0)
+        self.assertEqual(stores1, stores0)
+        self.assertEqual(len(people1), 7)
+        self.assertEqual(people1[4], (5, 1, "Caleb", 1, 0, 5))
+        self.assertEqual([r for i, r in enumerate(people1) if i != 4], [r for i, r in enumerate(people0) if i != 4])
+
+    def test_rename_skipped_if_name_already_changed(self):
+        path = self.make_v3(version=4, names=("Monty", "Nathan", "Adrian", "Sierra", "Jake", "Raheem", "Justin"))
+        _, people0, _ = self.snapshot(path)
+        proc, base = self.start(path)
+        try:
+            a = Client(base)
+            a.login("8642")
+            _, adm = a.req("GET", "/api/admin")
+            self.assertIn("Jake", [p["name"] for p in adm["people"]])
+            self.assertNotIn("Caleb", [p["name"] for p in adm["people"]])
+            self.assertIn("rename skipped", " ".join(x["detail"] for x in adm["audit"] if x["action"] == "migrate"))
+        finally:
+            proc.terminate()
+            proc.wait(5)
+        self.assertEqual(self.snapshot(path)[1], people0)
+
+    def test_rename_skipped_if_caleb_already_exists(self):
+        path = self.make_v3(version=4, names=self.V4, extra_people=[("Caleb", 1)])
+        _, people0, _ = self.snapshot(path)
+        proc, base = self.start(path)
+        proc.terminate()
+        proc.wait(5)
+        self.assertEqual(self.snapshot(path)[1], people0)
 
 
 if __name__ == "__main__":

@@ -96,7 +96,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(r["result"]["payouts"]["pool"], 3000)
         self.assertEqual([x["name"] for x in r["stores"]], ["Chrysler Muskegon"])
-        self.assertEqual([p["name"] for p in r["people"]], ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin"])
+        self.assertEqual([p["name"] for p in r["people"]], ["Monty", "Nathan", "Adrian", "Sierra", "Caleb", "Raheem", "Justin"])
         self.assertEqual(c.login("2468")[0], 401)          # a leftover STORE_PIN_2 env var does nothing (no 2nd store)
         self.assertEqual(c.req("GET", "/api/entry/1")[0], 401)
         self.assertEqual(c.req("POST", "/api/entry/1/grid", {"date": self.yday, "rows": []})[0], 401)
@@ -244,7 +244,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual([st["appt_target"] for st in self.fresh["stores"]], [60])
         self.assertEqual([(st["new_target"], st["used_target"]) for st in self.fresh["stores"]], [(70, 140000)])
         self.assertEqual([(p["name"], p["placeholder"]) for p in self.fresh["people"]],
-                         [(n, 0) for n in ("Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin")])
+                         [(n, 0) for n in ("Monty", "Nathan", "Adrian", "Sierra", "Caleb", "Raheem", "Justin")])
         self.assertIn("db_dir_is_mount", self.fresh["storage"])
         # countdown target: Sep 30 2026 11:59:59 PM Eastern (EDT = UTC-4) -> Oct 1 03:59:59 UTC
         _, st = Client(self.base).req("GET", "/api/state")

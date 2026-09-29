@@ -13,7 +13,7 @@ STORES = [
     {"id": 1, "name": "Chrysler Muskegon", "short": "CJDR Muskegon", "color": "#e11d48", "new_target": 70, "used_target": 140000,
      "appt_target": 60, "contribution": 3000},
 ]
-NAMES = ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin"]
+NAMES = ["Monty", "Nathan", "Adrian", "Sierra", "Caleb", "Raheem", "Justin"]
 DAYS = ["2026-09-26", "2026-09-27", "2026-09-28", "2026-09-29", "2026-09-30"]
 AFTER = date(2026, 10, 2)
 POOL_C = 300000

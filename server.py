@@ -50,11 +50,12 @@ DEFAULT_STORES = [
     ("Chrysler Muskegon", "CJDR Muskegon", "#e11d48", 70, 140000, 3000, 60),
 ]
 STORE_NAME = DEFAULT_STORES[0][0]
-DEFAULT_ROSTER = ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin"]
+DEFAULT_ROSTER = ["Monty", "Nathan", "Adrian", "Sierra", "Caleb", "Raheem", "Justin"]
 OLD_TAGLINES = ("3 stores · 1 month · $10,500 on the line", "3 stores · 5 days · $10,500 on the line",
                 "6 closers · 5 days · $3,000 on the line")
 ADDED_V4 = "Justin"
-SCHEMA_VERSION = 4
+RENAME_V5 = ("Jacob", "Caleb")   # same rep row/id, so his entries carry over
+SCHEMA_VERSION = 5
 DEFAULT_PINS = {"admin": "9999", "stores": ["1111"], "view": ""}
 
 # --------------------------------------------------------------------------------------------- db
@@ -223,14 +224,18 @@ def migrate_settings(first_run):
     """One-time upgrades of an existing database:
     v1 -> v2: Oct 1-31 month -> Sep 26-30 five-day format with appointments.
     v2 -> v3: 3 stores / $10,500 -> Chrysler Muskegon only / $3,000 with the real roster.
-    v3 -> v4: add Justin to the roster (insert only; existing reps, entries, PINs, targets and prizes untouched)."""
+    v3 -> v4: add Justin to the roster (insert only; existing reps, entries, PINs, targets and prizes untouched).
+    v4 -> v5: rename Jacob -> Caleb in place (same id, entries carry over), only if the name is still Jacob."""
     ver = get_settings().get("schema_version") or 1
     if ver >= SCHEMA_VERSION:
         return
     if not first_run and ver < 3:
         migrate_single_store()
-    elif not first_run and ver < 4:
-        migrate_add_justin()
+    elif not first_run:
+        if ver < 4:
+            migrate_add_justin()
+        if ver < 5:
+            migrate_rename_jacob()
     if not first_run and ver < 2:
         cur = get_settings()
         new = {k: DEFAULT_SETTINGS[k] for k in ("start_date", "end_date", "appt_start", "appt_end", "weight_new",
@@ -250,7 +255,7 @@ def migrate_settings(first_run):
 
 def migrate_single_store():
     """v3: keep only Chrysler Muskegon (its entries, PIN and targets are kept), set the $3,000 pool and prize table,
-    and put the real roster (Monty, Nathan, Adrian, Sierra, Jacob, Raheem) in place of placeholder reps."""
+    and put the real roster (Monty, Nathan, Adrian, Sierra, Caleb, Raheem, Justin) in place of placeholder reps."""
     stores = db.q("SELECT id, name FROM stores ORDER BY sort,id")
     if not stores:
         return
@@ -319,6 +324,26 @@ def migrate_add_justin():
     if get_settings().get("tagline") in OLD_TAGLINES:
         set_setting("tagline", DEFAULT_SETTINGS["tagline"])
     audit("system", "migrate", f"roster: {what}; entries, PINs, targets and prizes unchanged")
+
+
+def migrate_rename_jacob():
+    """v5: rename Jacob -> Caleb on the same salespeople row (id, active flag, sort and every entry stay as they are).
+    Only a rep still named exactly Jacob is renamed; if the name was already changed, or a Caleb already exists,
+    nothing is touched."""
+    old, new = RENAME_V5
+    store = db.one("SELECT id FROM stores WHERE name=? ORDER BY sort,id", (STORE_NAME,)) or db.one("SELECT id FROM stores ORDER BY sort,id")
+    if not store:
+        return
+    with db.tx():
+        c = db.conn
+        rows = c.execute("SELECT id FROM salespeople WHERE store_id=? AND trim(name)=?", (store["id"], old)).fetchall()
+        caleb = c.execute("SELECT id FROM salespeople WHERE store_id=? AND lower(trim(name))=?", (store["id"], new.lower())).fetchone()
+        if len(rows) == 1 and not caleb:
+            c.execute("UPDATE salespeople SET name=? WHERE id=?", (new, rows[0][0]))
+            what = f"renamed {old} -> {new} (id {rows[0][0]}, entries kept)"
+        else:
+            what = f"{old} -> {new} rename skipped ({len(rows)} rep(s) named {old}, {new} {'exists' if caleb else 'absent'})"
+    audit("system", "migrate", f"roster: {what}")
 
 
 def init_db():
