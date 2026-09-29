@@ -1,6 +1,6 @@
 # ⚡ Lakeshore Showdown · Sep 26–30, 2026
 
-**Chrysler Muskegon** · Sat Sep 26 – Wed Sep 30, 2026 · ends **Wed Sep 30, 11:59:59 PM ET** · **$3,000 prize pool** · 6 closers: Monty, Nathan, Adrian, Sierra, Jacob, Raheem · Live board + countdown on your phone.
+**Chrysler Muskegon** · Sat Sep 26 – Wed Sep 30, 2026 · ends **Wed Sep 30, 11:59:59 PM ET** · **$3,000 prize pool** · 7 closers: Monty, Nathan, Adrian, Sierra, Jacob, Raheem, Justin · Live board + countdown on your phone.
 
 ## The huddle version
 

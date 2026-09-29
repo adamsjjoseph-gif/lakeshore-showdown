@@ -53,7 +53,7 @@ class AdminControlTest(unittest.TestCase):
         st, r = self.admin.req("GET", f"/api/entry/all?date={self.day1}")
         self.assertEqual(st, 200)
         self.assertEqual([sec["store"]["name"] for sec in r["sections"]], ["Chrysler Muskegon"])
-        self.assertEqual([g["name"] for g in r["sections"][0]["grid"]], ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem"])
+        self.assertEqual([g["name"] for g in r["sections"][0]["grid"]], ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin"])
         self.assertTrue(all(x["rows"] == 0 for x in r["day_status"]))
         # admin enters a past day
         st, _ = self.admin.req("POST", "/api/entry/1/grid", {"date": self.day1, "rows": [

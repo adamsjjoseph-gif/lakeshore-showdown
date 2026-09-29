@@ -58,7 +58,7 @@ class MigrationTest(unittest.TestCase):
                              ("2026-09-26", "2026-09-30", "2026-09-26", "2026-09-29"))
             self.assertEqual(s["prizes"], {"points": [900, 275, 0], "new": [575, 0, 0], "used": [575, 0, 0],
                                            "appt": [425, 0, 0], "hot_shot": 50})
-            self.assertEqual(s["tagline"], "6 closers · 5 days · $3,000 on the line")
+            self.assertEqual(s["tagline"], "7 closers · 5 days · $3,000 on the line")
             self.assertTrue(adm["budget_ok"])
             self.assertEqual(adm["budget"]["total"], 3000)
             self.assertEqual([x["name"] for x in adm["stores"]], ["Chrysler Muskegon"])
@@ -126,9 +126,9 @@ class SingleStoreMigrationTest(unittest.TestCase):
             self.assertEqual([(x["id"], x["name"], x["contribution"]) for x in adm["stores"]], [(1, "Chrysler Muskegon", 3000)])
             self.assertEqual(adm["pool"], 3000)
             self.assertTrue(adm["budget_ok"])
-            self.assertEqual(adm["settings"]["tagline"], "6 closers · 5 days · $3,000 on the line")
+            self.assertEqual(adm["settings"]["tagline"], "7 closers · 5 days · $3,000 on the line")
             active = [p["name"] for p in adm["people"] if p["active"]]
-            self.assertEqual(active, ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem"])
+            self.assertEqual(active, ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin"])
             # placeholder #7 had a real entry: kept (inactive) so the entry still counts for the store goal
             p7 = next(p for p in adm["people"] if p["id"] == 7)
             self.assertEqual((p7["active"], p7["deal_rows"]), (0, 1))
@@ -142,9 +142,102 @@ class SingleStoreMigrationTest(unittest.TestCase):
             proc.wait(5)
         # restarting doesn't migrate again
         con = sqlite3.connect(path)
-        self.assertEqual(json.loads(con.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()[0]), 3)
+        self.assertEqual(json.loads(con.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()[0]), 4)
         self.assertEqual(con.execute("SELECT COUNT(*) FROM stores").fetchone()[0], 1)
         con.close()
+
+
+class AddJustinMigrationTest(unittest.TestCase):
+    """The live v3 database (Muskegon only, 6 reps, real entries) -> v4: Justin is appended; nothing else changes."""
+
+    def make_v3(self, extra_people=()):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "v3.db")
+        con = sqlite3.connect(path)
+        con.executescript(V2_SCHEMA)
+        con.execute("INSERT INTO stores(name,short,color,new_target,used_target,contribution,sort,appt_target) "
+                    "VALUES('Chrysler Muskegon','CJDR Muskegon','#e11d48',70,140000,3000,0,60)")
+        for k, n in enumerate(["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem"], start=1):
+            con.execute("INSERT INTO salespeople(store_id,name,placeholder,sort) VALUES(1,?,0,?)", (n, k))
+        for n, active in extra_people:
+            con.execute("INSERT INTO salespeople(store_id,name,active,placeholder,sort) VALUES(1,?,?,0,99)", (n, active))
+        prizes = {"points": [900, 275, 0], "new": [575, 0, 0], "used": [575, 0, 0], "appt": [425, 0, 0], "hot_shot": 50}
+        for k, v in {"schema_version": 3, "prizes": prizes}.items():
+            con.execute("INSERT INTO settings VALUES(?,?)", (k, json.dumps(v)))
+        con.execute("INSERT INTO deals(store_id,sp_id,date,kind,units,gross,entered_by) VALUES(1,6,'2026-09-26','used',1,4419,'admin')")
+        con.execute("INSERT INTO deals(store_id,sp_id,date,kind,units,gross,entered_by) VALUES(1,3,'2026-09-28','used',1,4318,'admin')")
+        con.commit()
+        con.close()
+        return path
+
+    def start(self, path):
+        port = free_port()
+        env = {**os.environ, "PORT": str(port), "DB_PATH": path, "SEED_DEMO": "1", "ADMIN_PIN": "8642", "QUIET": "1"}
+        proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py")], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        base = f"http://127.0.0.1:{port}"
+        for _ in range(50):
+            try:
+                urllib.request.urlopen(base + "/healthz")
+                break
+            except Exception:
+                time.sleep(0.1)
+        return proc, base
+
+    def snapshot(self, path):
+        con = sqlite3.connect(path)
+        deals = con.execute("SELECT * FROM deals ORDER BY id").fetchall()
+        people = con.execute("SELECT * FROM salespeople ORDER BY id").fetchall()
+        stores = con.execute("SELECT * FROM stores ORDER BY id").fetchall()
+        con.close()
+        return deals, people, stores
+
+    def test_v3_database_gets_justin_and_keeps_everything(self):
+        path = self.make_v3()
+        deals0, people0, stores0 = self.snapshot(path)
+        for _ in range(2):          # second start must not add a second Justin
+            proc, base = self.start(path)
+            try:
+                a = Client(base)
+                self.assertEqual(a.login("8642")[0], 200)
+                _, adm = a.req("GET", "/api/admin")
+                self.assertEqual([p["name"] for p in adm["people"] if p["active"]],
+                                 ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin"])
+                self.assertEqual(adm["settings"]["tagline"], "7 closers · 5 days · $3,000 on the line")
+                self.assertEqual(adm["pool"], 3000)
+                self.assertTrue(adm["budget_ok"])
+                self.assertEqual(adm["settings"]["prizes"], {"points": [900, 275, 0], "new": [575, 0, 0], "used": [575, 0, 0],
+                                                             "appt": [425, 0, 0], "hot_shot": 50})
+                self.assertEqual(adm["deal_count"], 2)
+                self.assertEqual(sum("added Justin" in x["detail"] for x in adm["audit"] if x["action"] == "migrate"), 1)
+                _, st = Client(base).req("GET", "/api/state")
+                self.assertIn("Justin", [x["name"] for x in st["result"]["leaderboards"]["points"]])
+            finally:
+                proc.terminate()
+                proc.wait(5)
+        deals1, people1, stores1 = self.snapshot(path)
+        self.assertEqual(deals1, deals0)                      # every entry byte-for-byte unchanged
+        self.assertEqual(stores1, stores0)                    # PIN hash / targets / contribution unchanged
+        self.assertEqual(people1[:6], people0)                # existing reps unchanged
+        self.assertEqual(people1[6][1:], (1, "Justin", 1, 0, 7))
+        self.assertEqual(len(people1), 7)
+
+    def test_existing_justin_is_not_duplicated_and_custom_tagline_kept(self):
+        path = self.make_v3(extra_people=[("justin", 0)])
+        con = sqlite3.connect(path)
+        con.execute("INSERT INTO settings VALUES('tagline', ?)", (json.dumps("Let's go Muskegon"),))
+        con.commit()
+        con.close()
+        proc, base = self.start(path)
+        try:
+            a = Client(base)
+            a.login("8642")
+            _, adm = a.req("GET", "/api/admin")
+            self.assertEqual([p["name"].lower() for p in adm["people"]].count("justin"), 1)
+            self.assertTrue(next(p for p in adm["people"] if p["name"].lower() == "justin")["active"])
+            self.assertEqual(adm["settings"]["tagline"], "Let's go Muskegon")
+        finally:
+            proc.terminate()
+            proc.wait(5)
 
 
 if __name__ == "__main__":

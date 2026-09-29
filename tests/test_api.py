@@ -96,7 +96,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(r["result"]["payouts"]["pool"], 3000)
         self.assertEqual([x["name"] for x in r["stores"]], ["Chrysler Muskegon"])
-        self.assertEqual([p["name"] for p in r["people"]], ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem"])
+        self.assertEqual([p["name"] for p in r["people"]], ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin"])
         self.assertEqual(c.login("2468")[0], 401)          # a leftover STORE_PIN_2 env var does nothing (no 2nd store)
         self.assertEqual(c.req("GET", "/api/entry/1")[0], 401)
         self.assertEqual(c.req("POST", "/api/entry/1/grid", {"date": self.yday, "rows": []})[0], 401)
@@ -114,7 +114,7 @@ class ApiTest(unittest.TestCase):
         ids = self.roster(1)
         st, r = c.req("GET", "/api/entry/1")
         self.assertEqual(st, 200)
-        self.assertEqual(len(r["grid"]), 6)
+        self.assertEqual(len(r["grid"]), 7)
         rows = [{"sp_id": ids[0], "new": 2, "used": [{"gross": 2500}, {"gross": 1200, "split": True}]},
                 {"sp_id": ids[1], "new": 0.5, "used": []}]
         st, r = c.req("POST", "/api/entry/1/grid", {"date": self.yday, "rows": rows})
@@ -235,7 +235,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual((s["appt_start"], s["appt_end"]), ("2026-09-26", "2026-09-29"))
         self.assertEqual(s["prizes"], {"points": [900, 275, 0], "new": [575, 0, 0], "used": [575, 0, 0],
                                        "appt": [425, 0, 0], "hot_shot": 50})
-        self.assertEqual(s["tagline"], "6 closers · 5 days · $3,000 on the line")
+        self.assertEqual(s["tagline"], "7 closers · 5 days · $3,000 on the line")
         self.assertEqual(self.fresh["periods"], 5)
         self.assertTrue(self.fresh["budget_ok"])
         self.assertEqual(self.fresh["budget"]["total"], 3000)
@@ -244,7 +244,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual([st["appt_target"] for st in self.fresh["stores"]], [60])
         self.assertEqual([(st["new_target"], st["used_target"]) for st in self.fresh["stores"]], [(70, 140000)])
         self.assertEqual([(p["name"], p["placeholder"]) for p in self.fresh["people"]],
-                         [(n, 0) for n in ("Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem")])
+                         [(n, 0) for n in ("Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin")])
         self.assertIn("db_dir_is_mount", self.fresh["storage"])
         # countdown target: Sep 30 2026 11:59:59 PM Eastern (EDT = UTC-4) -> Oct 1 03:59:59 UTC
         _, st = Client(self.base).req("GET", "/api/state")

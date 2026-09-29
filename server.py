@@ -23,7 +23,7 @@ COOKIE = "spiff_session"
 
 DEFAULT_SETTINGS = {
     "contest_name": "Lakeshore Showdown",
-    "tagline": "6 closers · 5 days · $3,000 on the line",
+    "tagline": "7 closers · 5 days · $3,000 on the line",
     "start_date": "2026-09-26",
     "end_date": "2026-09-30",
     "appt_start": calc.DEFAULT_APPT_WINDOW[0],   # appointments only count on these dates (inclusive)
@@ -50,9 +50,11 @@ DEFAULT_STORES = [
     ("Chrysler Muskegon", "CJDR Muskegon", "#e11d48", 70, 140000, 3000, 60),
 ]
 STORE_NAME = DEFAULT_STORES[0][0]
-DEFAULT_ROSTER = ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem"]
-OLD_TAGLINES = ("3 stores · 1 month · $10,500 on the line", "3 stores · 5 days · $10,500 on the line")
-SCHEMA_VERSION = 3
+DEFAULT_ROSTER = ["Monty", "Nathan", "Adrian", "Sierra", "Jacob", "Raheem", "Justin"]
+OLD_TAGLINES = ("3 stores · 1 month · $10,500 on the line", "3 stores · 5 days · $10,500 on the line",
+                "6 closers · 5 days · $3,000 on the line")
+ADDED_V4 = "Justin"
+SCHEMA_VERSION = 4
 DEFAULT_PINS = {"admin": "9999", "stores": ["1111"], "view": ""}
 
 # --------------------------------------------------------------------------------------------- db
@@ -220,12 +222,15 @@ def migrate_schema():
 def migrate_settings(first_run):
     """One-time upgrades of an existing database:
     v1 -> v2: Oct 1-31 month -> Sep 26-30 five-day format with appointments.
-    v2 -> v3: 3 stores / $10,500 -> Chrysler Muskegon only / $3,000 with the real roster."""
+    v2 -> v3: 3 stores / $10,500 -> Chrysler Muskegon only / $3,000 with the real roster.
+    v3 -> v4: add Justin to the roster (insert only; existing reps, entries, PINs, targets and prizes untouched)."""
     ver = get_settings().get("schema_version") or 1
     if ver >= SCHEMA_VERSION:
         return
     if not first_run and ver < 3:
         migrate_single_store()
+    elif not first_run and ver < 4:
+        migrate_add_justin()
     if not first_run and ver < 2:
         cur = get_settings()
         new = {k: DEFAULT_SETTINGS[k] for k in ("start_date", "end_date", "appt_start", "appt_end", "weight_new",
@@ -289,6 +294,31 @@ def migrate_single_store():
     db.x("DELETE FROM settings WHERE key='qualifier_units'")
     audit("system", "migrate", f"single store: kept {STORE_NAME}; removed " + (", ".join(removed) or "nothing")
           + f"; pool ${DEFAULT_STORES[0][5]:,}; new prize table; roster " + ", ".join(DEFAULT_ROSTER))
+
+
+def migrate_add_justin():
+    """v4: add Justin to Chrysler Muskegon (after the existing reps). Insert-only: no existing rep, entry, PIN,
+    target or prize is changed. If a Justin already exists (e.g. added on the Admin page) he is just made active.
+    The tagline is bumped to 7 closers only if it still reads the old default."""
+    store = db.one("SELECT id FROM stores WHERE name=? ORDER BY sort,id", (STORE_NAME,)) or db.one("SELECT id FROM stores ORDER BY sort,id")
+    if not store:
+        return
+    with db.tx():
+        c = db.conn
+        row = c.execute("SELECT id, active FROM salespeople WHERE store_id=? AND lower(trim(name))=?",
+                        (store["id"], ADDED_V4.lower())).fetchone()
+        if row:
+            c.execute("UPDATE salespeople SET active=1 WHERE id=?", (row[0],))
+            what = f"{ADDED_V4} already on roster (id {row[0]}), made active"
+        else:
+            mx = c.execute("SELECT COALESCE(MAX(sort),0) FROM salespeople WHERE store_id=? AND sort<50",
+                           (store["id"],)).fetchone()[0]
+            i = c.execute("INSERT INTO salespeople(store_id,name,active,placeholder,sort) VALUES(?,?,1,0,?)",
+                          (store["id"], ADDED_V4, mx + 1)).lastrowid
+            what = f"added {ADDED_V4} (id {i})"
+    if get_settings().get("tagline") in OLD_TAGLINES:
+        set_setting("tagline", DEFAULT_SETTINGS["tagline"])
+    audit("system", "migrate", f"roster: {what}; entries, PINs, targets and prizes unchanged")
 
 
 def init_db():

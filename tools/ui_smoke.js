@@ -19,7 +19,7 @@ const assert = (c, m) => { if (!c) { console.error("FAIL: " + m); process.exit(1
   await p.waitForSelector(".grow");
   const day = await p.inputValue("#dateIn");
   assert(/^\d{4}-\d{2}-\d{2}$/.test(day), "entry date defaults to the last selling day = " + day);
-  assert((await p.$$(".grow")).length === 6, "store grid lists the 6 reps");
+  assert((await p.$$(".grow")).length === 7, "store grid lists the 7 reps");
   // what's already saved for rep row 0
   const n0 = parseFloat(await p.inputValue('[data-new="0"]'));
   await p.click('[data-inc="0"]'); await p.click('[data-inc="0"]');           // +1 new unit
