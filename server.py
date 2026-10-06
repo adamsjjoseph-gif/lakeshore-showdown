@@ -22,6 +22,11 @@ TOGR_FILE = os.path.join(os.path.dirname(DB_PATH), "togr_board.json")
 TOGR_USER = "togr"
 TOGR_PASS_SHA256 = "4a5930c92ce6b4e972b15f7d1387d42baea23b7a0f88f36a8e25714112517dd0"  # SHA-256 of the manager password
 TOGR_LOCK = threading.Lock()
+# Chrysler Muskegon battle board: same pattern, its own file and login
+MUSK_FILE = os.path.join(os.path.dirname(DB_PATH), "musk_board.json")
+MUSK_USER = "musk"
+MUSK_PASS_SHA256 = "b874f23359a0da9e6906831fb094ba2b37ed8c131d4178746759437ae513697d"  # SHA-256 of the manager password
+MUSK_LOCK = threading.Lock()
 PORT = int(os.environ.get("PORT", "8080"))
 PBKDF2_ITERS = 100_000
 COOKIE = "spiff_session"
@@ -563,7 +568,8 @@ def csv_text(header, rows):
 
 # ------------------------------------------------------------------------------------ handler
 PAGES = {"/": "index.html", "/enter": "enter.html", "/admin": "admin.html", "/login": "login.html",
-         "/rules": "rules.html", "/togr": "togr/index.html", "/battleboard": "togr/index.html", "/togrbattleboard": "togr/index.html"}
+         "/rules": "rules.html", "/togr": "togr/index.html", "/battleboard": "togr/index.html", "/togrbattleboard": "togr/index.html",
+         "/musk": "musk/index.html", "/muskbattleboard": "musk/index.html", "/muskegonbattleboard": "musk/index.html"}
 MIME = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
         ".svg": "image/svg+xml", ".png": "image/png", ".ttf": "font/ttf", ".ico": "image/x-icon",
         ".pdf": "application/pdf", ".json": "application/json", ".webmanifest": "application/manifest+json"}
@@ -1131,22 +1137,22 @@ class Handler(BaseHTTPRequestHandler):
                   {"Content-Disposition": f'attachment; filename="showdown_backup_{date.today().isoformat()}.db"'})
 
     # ------------------------------------------------------------------ TOGR battle board (separate from the spiff contest)
-    def api_togr_get(self, s, qs):
+    def _board_get(self, path):
         try:
-            with open(TOGR_FILE, encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 j = json.load(f)
         except FileNotFoundError:
             j = {}
         self.send(200, {"ok": True, "data": j.get("data"), "updated": j.get("updated")})
 
-    def api_togr_save(self, s, qs):
+    def _board_save(self, path, user, pass_sha, lock, prefix):
         ip = self.ip()
         if rate_limited(ip):
             raise ApiError(429, "Too many wrong passwords. Wait 10 minutes and try again.")
         b = self.body()
         u = str(b.get("user", "")).strip().lower()
         p = str(b.get("pass", ""))
-        ok = hmac.compare_digest(u, TOGR_USER) and hmac.compare_digest(hashlib.sha256(p.encode()).hexdigest(), TOGR_PASS_SHA256)
+        ok = hmac.compare_digest(u, user) and hmac.compare_digest(hashlib.sha256(p.encode()).hexdigest(), pass_sha)
         if not ok:
             note_fail(ip)
             time.sleep(0.4)
@@ -1155,22 +1161,33 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(data, dict) or not isinstance(data.get("reps"), list):
             raise ApiError(400, "bad data")
         now = int(time.time())
-        with TOGR_LOCK:
-            os.makedirs(os.path.dirname(TOGR_FILE) or ".", exist_ok=True)
-            if os.path.exists(TOGR_FILE):
-                bdir = os.path.join(os.path.dirname(TOGR_FILE), "togr_backups")
+        with lock:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            if os.path.exists(path):
+                bdir = os.path.join(os.path.dirname(path), prefix + "_backups")
                 os.makedirs(bdir, exist_ok=True)
                 try:
                     import shutil
-                    shutil.copyfile(TOGR_FILE, os.path.join(bdir, "togr_" + datetime.now().strftime("%Y%m%d_%H") + ".json"))
+                    shutil.copyfile(path, os.path.join(bdir, prefix + "_" + datetime.now().strftime("%Y%m%d_%H") + ".json"))
                 except Exception:
                     pass
-            tmp = TOGR_FILE + ".tmp"
+            tmp = path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"updated": now, "data": data}, f)
-            os.replace(tmp, TOGR_FILE)
+            os.replace(tmp, path)
         self.send(200, {"ok": True, "updated": now})
 
+    def api_togr_get(self, s, qs):
+        return self._board_get(TOGR_FILE)
+
+    def api_togr_save(self, s, qs):
+        return self._board_save(TOGR_FILE, TOGR_USER, TOGR_PASS_SHA256, TOGR_LOCK, "togr")
+
+    def api_musk_get(self, s, qs):
+        return self._board_get(MUSK_FILE)
+
+    def api_musk_save(self, s, qs):
+        return self._board_save(MUSK_FILE, MUSK_USER, MUSK_PASS_SHA256, MUSK_LOCK, "musk")
 
 ROUTES = [
     ("GET", r"/api/me", Handler.api_me),
@@ -1196,6 +1213,8 @@ ROUTES = [
     ("GET", r"/api/admin/backup\.db", Handler.api_admin_backup),
     ("GET", r"/api/togr/board", Handler.api_togr_get),
     ("POST", r"/api/togr/board", Handler.api_togr_save),
+    ("GET", r"/api/musk/board", Handler.api_musk_get),
+    ("POST", r"/api/musk/board", Handler.api_musk_save),
 ]
 
 
