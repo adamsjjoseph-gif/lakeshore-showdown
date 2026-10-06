@@ -17,6 +17,11 @@ import demo
 BASE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(BASE, "static")
 DB_PATH = os.environ.get("DB_PATH", os.path.join(BASE, "data", "spiff.db"))
+# TOGR battle board: own JSON file on the same persistent disk as the contest database
+TOGR_FILE = os.path.join(os.path.dirname(DB_PATH), "togr_board.json")
+TOGR_USER = "togr"
+TOGR_PASS_SHA256 = "4a5930c92ce6b4e972b15f7d1387d42baea23b7a0f88f36a8e25714112517dd0"  # SHA-256 of the manager password
+TOGR_LOCK = threading.Lock()
 PORT = int(os.environ.get("PORT", "8080"))
 PBKDF2_ITERS = 100_000
 COOKIE = "spiff_session"
@@ -558,7 +563,7 @@ def csv_text(header, rows):
 
 # ------------------------------------------------------------------------------------ handler
 PAGES = {"/": "index.html", "/enter": "enter.html", "/admin": "admin.html", "/login": "login.html",
-         "/rules": "rules.html"}
+         "/rules": "rules.html", "/togr": "togr/index.html", "/battleboard": "togr/index.html"}
 MIME = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
         ".svg": "image/svg+xml", ".png": "image/png", ".ttf": "font/ttf", ".ico": "image/x-icon",
         ".pdf": "application/pdf", ".json": "application/json", ".webmanifest": "application/manifest+json"}
@@ -1125,6 +1130,47 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, data, "application/octet-stream",
                   {"Content-Disposition": f'attachment; filename="showdown_backup_{date.today().isoformat()}.db"'})
 
+    # ------------------------------------------------------------------ TOGR battle board (separate from the spiff contest)
+    def api_togr_get(self, s, qs):
+        try:
+            with open(TOGR_FILE, encoding="utf-8") as f:
+                j = json.load(f)
+        except FileNotFoundError:
+            j = {}
+        self.send(200, {"ok": True, "data": j.get("data"), "updated": j.get("updated")})
+
+    def api_togr_save(self, s, qs):
+        ip = self.ip()
+        if rate_limited(ip):
+            raise ApiError(429, "Too many wrong passwords. Wait 10 minutes and try again.")
+        b = self.body()
+        u = str(b.get("user", "")).strip().lower()
+        p = str(b.get("pass", ""))
+        ok = hmac.compare_digest(u, TOGR_USER) and hmac.compare_digest(hashlib.sha256(p.encode()).hexdigest(), TOGR_PASS_SHA256)
+        if not ok:
+            note_fail(ip)
+            time.sleep(0.4)
+            return self.send(401, {"ok": False, "error": "auth"})
+        data = b.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("reps"), list):
+            raise ApiError(400, "bad data")
+        now = int(time.time())
+        with TOGR_LOCK:
+            os.makedirs(os.path.dirname(TOGR_FILE) or ".", exist_ok=True)
+            if os.path.exists(TOGR_FILE):
+                bdir = os.path.join(os.path.dirname(TOGR_FILE), "togr_backups")
+                os.makedirs(bdir, exist_ok=True)
+                try:
+                    import shutil
+                    shutil.copyfile(TOGR_FILE, os.path.join(bdir, "togr_" + datetime.now().strftime("%Y%m%d_%H") + ".json"))
+                except Exception:
+                    pass
+            tmp = TOGR_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"updated": now, "data": data}, f)
+            os.replace(tmp, TOGR_FILE)
+        self.send(200, {"ok": True, "updated": now})
+
 
 ROUTES = [
     ("GET", r"/api/me", Handler.api_me),
@@ -1148,6 +1194,8 @@ ROUTES = [
     ("POST", r"/api/admin/demo", Handler.api_admin_demo),
     ("GET", r"/api/admin/export/(\w+)\.csv", Handler.api_admin_export),
     ("GET", r"/api/admin/backup\.db", Handler.api_admin_backup),
+    ("GET", r"/api/togr/board", Handler.api_togr_get),
+    ("POST", r"/api/togr/board", Handler.api_togr_save),
 ]
 
 
